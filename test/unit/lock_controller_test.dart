@@ -20,6 +20,28 @@ void main() {
     expect(lock.isLocked, isTrue);
   });
 
+  test('manual, panic, and background lock share one pre-lock boundary', () {
+    final lock = LockController(backgroundLock: true);
+    var transitions = 0;
+    final observedLockedStates = <bool>[];
+    lock.attachConfidentialityBoundary(() {
+      transitions++;
+      observedLockedStates.add(lock.isLocked);
+    });
+
+    lock
+      ..unlock()
+      ..lock()
+      ..unlock()
+      ..panic()
+      ..unlock()
+      ..onBackground();
+
+    expect(transitions, 3);
+    expect(observedLockedStates, everyElement(isFalse));
+    expect(lock.isLocked, isTrue);
+  });
+
   test('delayed background lock waits and foreground cancels timer', () {
     fakeAsync((async) {
       final lock = LockController(backgroundLock: true)..unlock();

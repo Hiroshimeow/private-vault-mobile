@@ -8,8 +8,23 @@ class LockController extends ChangeNotifier {
   final bool backgroundLock;
   bool _isLocked = true;
   Timer? _backgroundTimer;
+  VoidCallback? _confidentialityBoundary;
 
   bool get isLocked => _isLocked;
+
+  void attachConfidentialityBoundary(VoidCallback callback) {
+    if (_confidentialityBoundary != null &&
+        !identical(_confidentialityBoundary, callback)) {
+      throw StateError('A confidentiality boundary is already attached.');
+    }
+    _confidentialityBoundary = callback;
+  }
+
+  void detachConfidentialityBoundary(VoidCallback callback) {
+    if (identical(_confidentialityBoundary, callback)) {
+      _confidentialityBoundary = null;
+    }
+  }
 
   void unlock() {
     _backgroundTimer?.cancel();
@@ -22,6 +37,7 @@ class LockController extends ChangeNotifier {
     _backgroundTimer?.cancel();
     _backgroundTimer = null;
     if (_isLocked) return;
+    _confidentialityBoundary?.call();
     _isLocked = true;
     notifyListeners();
   }

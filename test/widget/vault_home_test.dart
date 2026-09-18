@@ -97,6 +97,39 @@ void main() {
     expect(find.text('Synthetic protected note'), findsOneWidget);
   });
 
+  testWidgets('decrypted note preview is not selectable', (tester) async {
+    final repository = FakeVaultRepository();
+    await repository.addBytes(
+      Uint8List.fromList('Non-copyable secret'.codeUnits),
+      kind: VaultItemKind.note,
+    );
+    final media = MediaVaultService(
+      repository: repository,
+      pickImport: () async => null,
+      capturePhoto: () async => null,
+      saveExport: (_, _) async => true,
+    );
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: VaultHome(
+            repository: repository,
+            media: media,
+            confirmExport: true,
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('Protected note'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Non-copyable secret'), findsOneWidget);
+    expect(find.byType(SelectableText), findsNothing);
+  });
+
   testWidgets('export confirmation can be disabled explicitly', (tester) async {
     final repository = FakeVaultRepository();
     var exports = 0;

@@ -51,12 +51,21 @@ class PrivateVaultApp extends StatefulWidget {
 
 class _PrivateVaultAppState extends State<PrivateVaultApp>
     with WidgetsBindingObserver {
+  final GlobalKey<NavigatorState> _secretNavigatorKey =
+      GlobalKey<NavigatorState>();
+  final GlobalKey<ScaffoldMessengerState> _secretMessengerKey =
+      GlobalKey<ScaffoldMessengerState>();
+  late final VoidCallback _confidentialityBoundary;
   late AppSettings _settings;
   late CoverKind _cover;
 
   @override
   void initState() {
     super.initState();
+    _confidentialityBoundary = _purgeSecretRoutes;
+    widget.lockController.attachConfidentialityBoundary(
+      _confidentialityBoundary,
+    );
     _settings = widget.initialSettings;
     _cover =
         widget.initialCover ??
@@ -64,6 +73,24 @@ class _PrivateVaultAppState extends State<PrivateVaultApp>
             ? CoverKind.notes
             : CoverKind.calculator);
     WidgetsBinding.instance.addObserver(this);
+  }
+
+  @override
+  void didUpdateWidget(covariant PrivateVaultApp oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (!identical(oldWidget.lockController, widget.lockController)) {
+      oldWidget.lockController.detachConfidentialityBoundary(
+        _confidentialityBoundary,
+      );
+      widget.lockController.attachConfidentialityBoundary(
+        _confidentialityBoundary,
+      );
+    }
+  }
+
+  void _purgeSecretRoutes() {
+    _secretMessengerKey.currentState?.clearSnackBars();
+    _secretNavigatorKey.currentState?.popUntil((route) => route.isFirst);
   }
 
   @override
@@ -85,6 +112,9 @@ class _PrivateVaultAppState extends State<PrivateVaultApp>
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    widget.lockController.detachConfidentialityBoundary(
+      _confidentialityBoundary,
+    );
     final panic = widget.panicService;
     if (panic != null) unawaited(panic.dispose());
     super.dispose();
@@ -212,6 +242,28 @@ class _PrivateVaultAppState extends State<PrivateVaultApp>
     await widget.settingsStore?.save(next);
   }
 
+  Widget _secretWorkspace() {
+    return ScaffoldMessenger(
+      key: _secretMessengerKey,
+      child: Navigator(
+        key: _secretNavigatorKey,
+        onGenerateRoute: (_) => MaterialPageRoute<void>(
+          settings: const RouteSettings(name: '/secret'),
+          builder: (_) => SecretWorkspace(
+            onLock: widget.lockController.lock,
+            vaultRepository: widget.vaultRepository,
+            mediaService: widget.mediaService,
+            settings: _settings,
+            disguiseBridge: widget.disguiseBridge,
+            onSettingsChanged: (next) {
+              unawaited(_applySettings(next));
+            },
+          ),
+        ),
+      ),
+    );
+  }
+
   Widget _coverWorkspace(BuildContext materialContext) {
     return switch (_cover) {
       CoverKind.calculator => CalculatorCover(
@@ -251,16 +303,7 @@ class _PrivateVaultAppState extends State<PrivateVaultApp>
             if (widget.lockController.isLocked) {
               return _coverWorkspace(materialContext);
             }
-            return SecretWorkspace(
-              onLock: widget.lockController.lock,
-              vaultRepository: widget.vaultRepository,
-              mediaService: widget.mediaService,
-              settings: _settings,
-              disguiseBridge: widget.disguiseBridge,
-              onSettingsChanged: (next) {
-                unawaited(_applySettings(next));
-              },
-            );
+            return _secretWorkspace();
           },
         ),
       ),

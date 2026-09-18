@@ -79,6 +79,7 @@ class _VaultHomeState extends State<VaultHome> {
     var draft = '';
     final note = await showDialog<String>(
       context: context,
+      useRootNavigator: false,
       builder: (dialogContext) => AlertDialog(
         title: const Text('New protected note'),
         content: TextField(
@@ -129,6 +130,7 @@ class _VaultHomeState extends State<VaultHome> {
       if (!mounted) return;
       await showModalBottomSheet<void>(
         context: context,
+        useRootNavigator: false,
         isScrollControlled: true,
         showDragHandle: true,
         builder: (context) => _VaultPreview(
@@ -150,6 +152,7 @@ class _VaultHomeState extends State<VaultHome> {
     if (widget.confirmExport) {
       final confirmed = await showDialog<bool>(
         context: context,
+        useRootNavigator: false,
         builder: (context) => AlertDialog(
           title: const Text('Export this item?'),
           content: const Text(
@@ -183,6 +186,7 @@ class _VaultHomeState extends State<VaultHome> {
   Future<void> _confirmDelete(VaultItem item) async {
     final confirmed = await showDialog<bool>(
       context: context,
+      useRootNavigator: false,
       builder: (context) => AlertDialog(
         title: const Text('Delete from vault?'),
         content: const Text(
@@ -350,7 +354,7 @@ class _VaultPreview extends StatelessWidget {
               ConstrainedBox(
                 constraints: const BoxConstraints(maxHeight: 420),
                 child: SingleChildScrollView(
-                  child: SelectableText(
+                  child: Text(
                     _decodeNote(bytes),
                     style: Theme.of(context).textTheme.bodyLarge,
                   ),
