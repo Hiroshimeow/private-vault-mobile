@@ -257,15 +257,11 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('Export this item?'), findsOneWidget);
 
-    tester.binding.handleAppLifecycleStateChanged(
-      AppLifecycleState.paused,
-    );
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.paused);
     await tester.pumpAndSettle();
     expect(find.text('Calculator'), findsOneWidget);
     expect(find.text('Export this item?'), findsNothing);
-    tester.binding.handleAppLifecycleStateChanged(
-      AppLifecycleState.resumed,
-    );
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
   });
 
   testWidgets('manual lock purges delete confirmation', (tester) async {
