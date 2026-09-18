@@ -79,6 +79,9 @@ void main() {
     expect(find.byTooltip('Lock now'), findsOneWidget);
 
     tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.paused);
+    expect(lock.isLocked, isTrue);
+
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
     await tester.pumpAndSettle();
     expect(find.text('Calculator'), findsOneWidget);
 
