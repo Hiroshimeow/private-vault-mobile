@@ -9,11 +9,11 @@ Private Vault Mobile is a local-first privacy utility for Android and iOS. It pr
 - PIN unlock with optional biometric convenience after a valid key has been provisioned.
 - Local encrypted vault for notes, images, videos, and documents.
 - Import/capture into app-owned storage; no public-gallery write unless explicitly exported.
-- Embedded private browser with app-owned profiles, optional clear-on-close, and download-to-vault.
-- Multiple isolated web profiles where the underlying WebView permits it.
+- Embedded private browser with sequential ephemeral logical profiles, optional clear-on-close, and direct HTTPS download-to-vault.
+- Profile switching clears the shared WebView cookie/cache/local-storage surface. V1 does not claim simultaneously retained independent WebView cookie jars where the platform/plugin does not expose them.
 - Panic conceal using shake and face-down signals with sensitivity/debounce controls.
 - Platform-accurate disguise controls.
-- Privacy hardening for lifecycle, screenshots/app-switcher previews, clipboard, and logs.
+- Privacy hardening for lifecycle, screenshots/app-switcher previews, no secret-copy action in V1, and no direct production logging of secret values.
 - No analytics, ads, remote backend, or cloud sync by default.
 
 ## Non-goals and platform limits
@@ -37,11 +37,11 @@ Private Vault Mobile is a local-first privacy utility for Android and iOS. It pr
 ## Core user flows
 1. Launch -> selected cover.
 2. Unlock affordance -> PIN -> optional biometric -> secret workspace.
-3. Import/capture -> encrypt -> persist ciphertext plus minimal metadata.
+3. Create note/import/capture -> encrypt -> persist ciphertext plus minimal metadata.
 4. Open vault item -> decrypt in memory -> view.
-5. Export -> explicit confirmation -> platform share/save.
+5. Export -> explicit item action -> confirmation by default -> platform save. Confirmation may be explicitly disabled in Settings.
 6. Panic/background/timeout -> lock -> cover.
-7. Browser profile -> isolated session -> downloads can be saved directly into vault.
+7. Browser logical profile -> clear shared WebView state on profile switch -> browse -> direct HTTPS responses can be saved into the vault. Authenticated WebView-cookie downloads are outside V1.
 
 ## Settings
 Cover selection, panic enablement, shake sensitivity, face-down delay, auto-lock duration, biometrics, browser clear-on-close, export confirmation, theme.

@@ -12,10 +12,10 @@ A casual or opportunistic person who temporarily accesses the device or sees pre
 - Authenticated encryption at rest.
 - Operating-system protected storage for the vault key.
 - No public-gallery writes except explicit export.
-- Android secure-window protection on secret surfaces.
+- Android `FLAG_SECURE` on the app activity.
 - iOS privacy cover during app-switcher transitions.
-- Clipboard controls and log redaction.
-- Browser profiles separated inside app-owned storage where platform APIs allow it.
+- V1 exposes no secret-copy action and never intentionally writes vault plaintext to the clipboard; production Dart source also forbids direct print/debug logging.
+- Browser profile switching clears the shared WebView cookie/cache/local-storage surface before changing logical profiles.
 
 ## Out of scope
 Root/jailbreak, malicious or compromised OS, privileged forensic tooling, coercion, hardware attacks, attacks while secrets are legitimately displayed, and guarantees of anonymous browsing.
@@ -27,7 +27,7 @@ Wrong unlock input reveals no secret workspace. Missing local key material or co
 Deleting app data removes normal app access, but physical flash blocks may retain historical data because of wear leveling, filesystem behavior, backups, or snapshots. V1 does not claim forensic secure erase.
 
 ## Browser limits
-Embedded browsing is not anonymity. Network infrastructure, destination services, device configuration, and the platform WebView engine may still observe traffic. Some services reject embedded WebViews.
+Embedded browsing is not anonymity. Network infrastructure, destination services, device configuration, and the platform WebView engine may still observe traffic. Some services reject embedded WebViews. V1 logical profiles are sequential and ephemeral because the cross-platform WebView layer does not expose simultaneous independent retained cookie jars. Direct HTTPS download-to-vault uses a separate client and therefore does not inherit authenticated WebView cookies.
 
 ## Recovery and rotation
 There is no server-side recovery. Loss of protected local key material can make encrypted content unrecoverable. Any future key rotation must preserve the previous valid state until replacement data is verified.

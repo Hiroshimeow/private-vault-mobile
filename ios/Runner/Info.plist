@@ -24,6 +24,10 @@
 	<string>????</string>
 	<key>CFBundleVersion</key>
 	<string>$(FLUTTER_BUILD_NUMBER)</string>
+	<key>NSFaceIDUsageDescription</key>
+	<string>Use Face ID to unlock the protected workspace when biometric unlock is enabled.</string>
+	<key>NSCameraUsageDescription</key>
+	<string>Capture a photo directly into protected local storage.</string>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
 	<key>UIApplicationSceneManifest</key>

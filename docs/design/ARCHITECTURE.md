@@ -27,11 +27,10 @@ Use a vetted authenticated-encryption package. Every item encryption operation u
 The app starts locked. Backgrounding, panic, or timeout clears transient secret state and routes back to the configured cover. Secret routes verify lock state before rendering.
 
 ## Native bridges
-Android: secure-window protection for secret surfaces and predeclared launcher aliases.
-iOS: privacy overlay during inactive/background transitions and predeclared alternate icons only.
+Android: `FLAG_SECURE` currently protects the whole Flutter activity, and launcher disguise switches only between predeclared Calculator/Notes aliases. iOS: a privacy overlay covers inactive/app-switcher snapshots; runtime disguise can switch only to predeclared alternate icons, never the display name.
 
 ## Browser isolation
-Each logical profile receives app-owned browser storage where the selected engine supports it. The product does not describe this as anonymity or cross-app isolation.
+The cross-platform WebView API exposes one app-level cookie/storage surface on supported platforms. V1 therefore implements **sequential ephemeral profiles**: switching profiles clears WebView cookies, cache, and local storage before opening the selected logical profile. It does not promise simultaneously retained independent cookie jars, native-app cloning, anonymity, or cross-app isolation. Direct HTTPS downloads can be encrypted to the vault, but V1 does not transfer authenticated WebView cookies into its separate download client.
 
 ## Persistence
-Encrypted content stays in app-private storage. Non-secret settings stay local. There is no remote backend in V1.
+Encrypted content stays in app-private storage. Non-secret settings stay local. Imported source files remain at their user-selected source location; camera capture is read into the vault and plugin-owned temporary capture data is deleted on a best-effort basis. Explicit export creates an unprotected copy outside the vault. There is no remote backend in V1.
