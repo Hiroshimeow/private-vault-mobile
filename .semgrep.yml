@@ -1,0 +1,37 @@
+rules:
+  - id: dart-insecure-tls-certificate-bypass
+    languages: [dart]
+    severity: ERROR
+    message: Do not override HttpClient.badCertificateCallback; vault traffic must use platform TLS validation.
+    patterns:
+      - pattern: $CLIENT.badCertificateCallback = $CALLBACK
+
+  - id: dart-cleartext-http-literal
+    languages: [dart]
+    severity: ERROR
+    message: Cleartext HTTP literals are forbidden in production Dart source.
+    pattern-regex: '["'']http://[^"'']+["'']'
+
+  - id: kotlin-webview-debugging-enabled
+    languages: [kotlin]
+    severity: ERROR
+    message: WebView remote debugging must not be enabled in production mobile code.
+    pattern: WebView.setWebContentsDebuggingEnabled(true)
+
+  - id: kotlin-cleartext-http-literal
+    languages: [kotlin]
+    severity: ERROR
+    message: Cleartext HTTP literals are forbidden in production Kotlin source.
+    pattern-regex: '["'']http://[^"'']+["'']'
+
+  - id: swift-manual-server-trust-credential
+    languages: [swift]
+    severity: ERROR
+    message: Manual URLCredential(trust:) handling can bypass default TLS validation and requires an explicit reviewed exception.
+    pattern: 'URLCredential(trust: $TRUST)'
+
+  - id: swift-cleartext-http-literal
+    languages: [swift]
+    severity: ERROR
+    message: Cleartext HTTP literals are forbidden in production Swift source.
+    pattern-regex: '["'']http://[^"'']+["'']'

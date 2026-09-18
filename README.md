@@ -1,6 +1,7 @@
 # Private Vault Mobile
 
 [![CI](https://github.com/Hiroshimeow/private-vault-mobile/actions/workflows/ci.yml/badge.svg)](https://github.com/Hiroshimeow/private-vault-mobile/actions/workflows/ci.yml)
+[![SAST](https://github.com/Hiroshimeow/private-vault-mobile/actions/workflows/sast.yml/badge.svg)](https://github.com/Hiroshimeow/private-vault-mobile/actions/workflows/sast.yml)
 
 A local-first Flutter privacy utility for Android and iOS. This is an original implementation based only on public behavior descriptions of privacy-vault products; it does not reuse third-party proprietary code, branding, copy, assets, or store metadata.
 
@@ -149,6 +150,8 @@ Installing on a device or publishing to the App Store requires normal Apple sign
 - iOS/macOS: release build with `--no-codesign`.
 
 Flutter SDK and pub caches use the Flutter Action's maintained GitHub cache integration.
+
+`.github/workflows/sast.yml` is an independent source-security gate using pinned **Semgrep CE 1.177.0**. It runs the community `p/security-audit` pack plus repository-owned rules in `.semgrep.yml`, fails on `ERROR` findings, and uploads a SARIF report artifact. Repository rules explicitly cover Dart, Kotlin, and Swift for mobile-specific high-risk patterns such as TLS validation bypass, cleartext HTTP literals, Android WebView debugging, and manual iOS server-trust credentials. Dart support in Semgrep is less mature than Kotlin/Swift, so this is a bounded SAST layer rather than a claim of complete vulnerability detection. The scanner runs locally in GitHub Actions and does not depend on GitHub Advanced Security.
 
 `.github/workflows/dependency-review.yml` runs on pull requests only when repository variable `ENABLE_DEPENDENCY_REVIEW=true`. GitHub Dependency Review on private repositories requires GitHub Advanced Security; leaving the variable unset prevents a false failing gate when that capability is unavailable.
 
