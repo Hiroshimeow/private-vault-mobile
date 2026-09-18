@@ -1,0 +1,211 @@
+name: Release RC
+
+on:
+  push:
+    tags:
+      - "v*.*.*-rc.*"
+
+permissions:
+  contents: read
+
+env:
+  FLUTTER_VERSION: 3.47.4
+  SEMGREP_VERSION: 1.177.0
+
+jobs:
+  quality:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.ref }}
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+      - name: Record exact source
+        run: git rev-parse HEAD | tee exact-source-sha.txt
+      - name: Resolve dependencies
+        run: flutter pub get --enforce-lockfile
+      - name: Verify tag version
+        run: dart run tool/check_release_version.dart "${{ github.ref_name }}"
+      - name: Format
+        run: dart format --output=none --set-exit-if-changed lib test integration_test tool
+      - name: Analyze
+        run: flutter analyze
+      - name: Test with machine-readable evidence
+        shell: bash
+        run: |
+          set -o pipefail
+          flutter test --coverage --machine | tee flutter-test.jsonl
+          dart run tool/summarize_flutter_test.dart flutter-test.jsonl test-summary.txt "Unit/widget tests"
+      - name: Security contracts
+        run: flutter test test/unit/logging_contract_test.dart test/unit/platform_privacy_contract_test.dart test/unit/release_security_contract_test.dart test/unit/release_workflow_contract_test.dart test/unit/release_version_contract_test.dart
+      - name: Dependency manifest
+        run: flutter pub deps --json > dependency-manifest.json
+      - name: Third-party license inventory
+        run: dart run tool/generate_third_party_licenses.dart THIRD_PARTY_LICENSES.txt
+      - uses: actions/upload-artifact@v7
+        with:
+          name: release-quality-evidence
+          path: |
+            exact-source-sha.txt
+            dependency-manifest.json
+            THIRD_PARTY_LICENSES.txt
+            flutter-test.jsonl
+            test-summary.txt
+            coverage/lcov.info
+
+  vulnerability:
+    uses: google/osv-scanner-action/.github/workflows/osv-scanner-reusable.yml@v2.6.0
+    with:
+      scan-args: |-
+        --lockfile=pubspec.lock
+      fail-on-vuln: true
+    permissions:
+      actions: read
+      contents: read
+      security-events: write
+
+  sast:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.ref }}
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+      - name: Install pinned Semgrep
+        run: python -m pip install --disable-pip-version-check semgrep==${SEMGREP_VERSION}
+      - name: Run fail-closed SAST
+        run: semgrep scan --config=p/security-audit --config=.semgrep.yml --severity ERROR --error --metrics=off --sarif --output=semgrep.sarif --exclude=.tooling --exclude=.dart_tool --exclude=build --exclude=test .
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: release-semgrep
+          path: semgrep.sarif
+          if-no-files-found: error
+
+  integration:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.ref }}
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+      - run: flutter pub get --enforce-lockfile
+      - name: Android emulator integration
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 35
+          arch: x86_64
+          profile: pixel_6
+          disable-animations: true
+          script: |
+            set -o pipefail
+            flutter test integration_test/private_vault_rc_test.dart -d emulator-5554 --machine | tee integration-test.jsonl
+            dart run tool/summarize_flutter_test.dart integration-test.jsonl integration-summary.txt "Android emulator integration tests"
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: android-integration-evidence
+          path: |
+            integration-test.jsonl
+            integration-summary.txt
+          if-no-files-found: error
+
+  android:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.ref }}
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+      - run: flutter pub get --enforce-lockfile
+      - name: Build debug test APK
+        run: flutter build apk --debug
+      - name: Label artifact truthfully
+        run: cp build/app/outputs/flutter-apk/app-debug.apk "private-vault-mobile-${{ github.ref_name }}-DEBUG-TEST-ONLY.apk"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: android-debug-test-only
+          path: private-vault-mobile-${{ github.ref_name }}-DEBUG-TEST-ONLY.apk
+          if-no-files-found: error
+
+  ios:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.ref }}
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+      - run: flutter pub get --enforce-lockfile
+      - name: iOS no-codesign smoke
+        run: flutter build ios --release --no-codesign
+
+  publish:
+    needs: [quality, vulnerability, sast, integration, android, ios]
+    permissions:
+      contents: write
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.ref }}
+      - uses: actions/download-artifact@v8
+        with:
+          path: release-assets
+      - name: Flatten release assets
+        run: |
+          mkdir dist
+          find release-assets -type f \( -name '*.apk' -o -name 'dependency-manifest.json' -o -name 'THIRD_PARTY_LICENSES.txt' -o -name 'exact-source-sha.txt' -o -name 'semgrep.sarif' -o -name 'flutter-test.jsonl' -o -name 'test-summary.txt' -o -name 'integration-test.jsonl' -o -name 'integration-summary.txt' \) -exec cp {} dist/ \;
+      - name: Checksums
+        run: cd dist && sha256sum * > SHA256SUMS.txt
+      - name: Release evidence
+        run: |
+          cat > dist/RELEASE_EVIDENCE.md <<EOF
+          # Private Vault Mobile ${{ github.ref_name }}
+
+          Exact commit: ${{ github.sha }}
+          GitHub run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+
+          Unit/widget test totals: $(cat dist/test-summary.txt)
+          Android emulator test totals: $(cat dist/integration-summary.txt)
+          Dependency vulnerability audit: OSV-Scanner v2.6.0 required and passed before publication.
+          Third-party license inventory: THIRD_PARTY_LICENSES.txt.
+
+          Android supported artifact: DEBUG-TEST-ONLY APK. No production signing key is configured.
+          iOS status: release compile smoke only, built with --no-codesign.
+          Hosted Android emulator integration: required gate before publication.
+
+          Physical-device validation remains NOT EXECUTED for real biometric/secure storage,
+          WebView process behavior, camera temp files, sensors, FLAG_SECURE visual behavior,
+          launcher aliases/OEM refresh, iOS alternate icon UX, and Keychain backup/restore behavior.
+          EOF
+          cd dist && sha256sum RELEASE_EVIDENCE.md >> SHA256SUMS.txt
+      - name: Create GitHub prerelease
+        uses: softprops/action-gh-release@v2
+        with:
+          prerelease: true
+          generate_release_notes: false
+          body_path: dist/RELEASE_EVIDENCE.md
+          files: |
+            dist/*

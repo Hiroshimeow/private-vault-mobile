@@ -1,0 +1,57 @@
+name: Android Integration
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  FLUTTER_VERSION: 3.47.4
+
+jobs:
+  emulator:
+    name: Android emulator RC integration
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Java
+        uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: 3.47.4
+          cache: true
+          pub-cache: true
+
+      - name: Resolve locked dependencies
+        run: flutter pub get --enforce-lockfile
+
+      - name: Run RC integration on emulator
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 35
+          arch: x86_64
+          profile: pixel_6
+          disable-animations: true
+          script: flutter test integration_test/private_vault_rc_test.dart -d emulator-5554
+
+      - name: Upload integration logs
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: android-integration-failure
+          path: |
+            build/
+          if-no-files-found: ignore
+          retention-days: 14
