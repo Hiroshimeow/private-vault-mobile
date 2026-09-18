@@ -10,6 +10,8 @@ void main() {
     expect(workflow, contains('integration_test/private_vault_rc_test.dart'));
     expect(workflow, contains('flutter-version: 3.47.4'));
     expect(workflow, contains('flutter pub get --enforce-lockfile'));
+    expect(workflow, contains('Enable KVM group perms'));
+    expect(workflow, contains('/dev/kvm'));
     expect(
       RegExp(r'run:\s*flutter pub get\s*$', multiLine: true).hasMatch(workflow),
       isFalse,
@@ -37,6 +39,8 @@ void main() {
       expect(workflow, contains('flutter-test.jsonl'));
       expect(workflow, contains('test-summary.txt'));
       expect(workflow, contains('dart run tool/summarize_flutter_test.dart'));
+      expect(workflow, contains('Enable KVM group perms'));
+      expect(workflow, contains('/dev/kvm'));
       expect(
         RegExp(r'flutter pub get --enforce-lockfile')
             .allMatches(workflow)
