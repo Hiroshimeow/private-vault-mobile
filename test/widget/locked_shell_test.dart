@@ -257,13 +257,13 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('Export this item?'), findsOneWidget);
 
-    await tester.binding.handleAppLifecycleStateChanged(
+    tester.binding.handleAppLifecycleStateChanged(
       AppLifecycleState.paused,
     );
     await tester.pumpAndSettle();
     expect(find.text('Calculator'), findsOneWidget);
     expect(find.text('Export this item?'), findsNothing);
-    await tester.binding.handleAppLifecycleStateChanged(
+    tester.binding.handleAppLifecycleStateChanged(
       AppLifecycleState.resumed,
     );
   });
