@@ -89,6 +89,56 @@ class _CalculatorCoverState extends State<CalculatorCover> {
     }
   }
 
+  _CalculatorKeyRole _roleFor(String label) {
+    if (label == 'C') return _CalculatorKeyRole.destructive;
+    if (label == '=') return _CalculatorKeyRole.equals;
+    if (label.length == 1 && '0123456789'.contains(label)) {
+      return _CalculatorKeyRole.number;
+    }
+    return _CalculatorKeyRole.operator;
+  }
+
+  String _semanticLabel(String label) {
+    return switch (label) {
+      '÷' => 'Divide',
+      '×' => 'Multiply',
+      '-' => 'Subtract',
+      '+' => 'Add',
+      '=' => 'Equals',
+      'C' => 'Clear',
+      _ => label,
+    };
+  }
+
+  ButtonStyle _buttonStyle(BuildContext context, _CalculatorKeyRole role) {
+    final colors = Theme.of(context).colorScheme;
+    final (background, foreground) = switch (role) {
+      _CalculatorKeyRole.number => (
+        colors.surfaceContainerHighest,
+        colors.onSurface,
+      ),
+      _CalculatorKeyRole.operator => (
+        colors.secondaryContainer,
+        colors.onSecondaryContainer,
+      ),
+      _CalculatorKeyRole.destructive => (
+        colors.errorContainer,
+        colors.onErrorContainer,
+      ),
+      _CalculatorKeyRole.equals => (colors.primary, colors.onPrimary),
+    };
+
+    return FilledButton.styleFrom(
+      backgroundColor: background,
+      foregroundColor: foreground,
+      elevation: 0,
+      padding: EdgeInsets.zero,
+      textStyle: Theme.of(context).textTheme.titleLarge
+          ?.copyWith(fontWeight: FontWeight.w600),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(22)),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     const labels = <String>[
@@ -120,58 +170,103 @@ class _CalculatorCoverState extends State<CalculatorCover> {
       ),
       body: SafeArea(
         child: Padding(
-          padding: const EdgeInsets.fromLTRB(20, 16, 20, 24),
-          child: Column(
-            children: [
-              Expanded(
-                child: Align(
-                  alignment: Alignment.bottomRight,
-                  child: Semantics(
-                    label: 'Calculator display',
-                    child: Text(
-                      _display,
-                      key: const Key('calculator-display'),
-                      maxLines: 1,
-                      style: Theme.of(context).textTheme.displayMedium,
-                    ),
-                  ),
-                ),
-              ),
-              const SizedBox(height: 18),
-              Expanded(
-                flex: 3,
-                child: Column(
-                  children: [
-                    for (var row = 0; row < 4; row++)
-                      Expanded(
-                        child: Padding(
-                          padding: EdgeInsets.only(bottom: row == 3 ? 0 : 10),
-                          child: Row(
-                            children: [
-                              for (var column = 0; column < 4; column++)
-                                Expanded(
-                                  child: Padding(
-                                    padding: EdgeInsets.only(
-                                      right: column == 3 ? 0 : 10,
-                                    ),
-                                    child: FilledButton(
-                                      onPressed: () =>
-                                          _press(labels[(row * 4) + column]),
-                                      child: Text(labels[(row * 4) + column]),
-                                    ),
-                                  ),
-                                ),
-                            ],
+          padding: const EdgeInsets.fromLTRB(16, 12, 16, 16),
+          child: LayoutBuilder(
+            builder: (context, constraints) {
+              const gap = 8.0;
+              const displayMinHeight = 44.0;
+              const displayGap = 12.0;
+              final keyWidth = (constraints.maxWidth - (gap * 3)) / 4;
+              final widthDrivenHeight = keyWidth.clamp(48.0, 76.0);
+              final heightDrivenHeight =
+                  ((constraints.maxHeight -
+                              displayMinHeight -
+                              displayGap -
+                              (gap * 3)) /
+                          4)
+                      .clamp(48.0, 76.0);
+              final keyHeight = widthDrivenHeight < heightDrivenHeight
+                  ? widthDrivenHeight
+                  : heightDrivenHeight;
+              final keypadHeight = (keyHeight * 4) + (gap * 3);
+
+              return Column(
+                children: [
+                  Expanded(
+                    child: Align(
+                      alignment: Alignment.bottomRight,
+                      child: Semantics(
+                        label: 'Calculator display',
+                        value: _display,
+                        child: SingleChildScrollView(
+                          key: const Key('calculator-display-viewport'),
+                          scrollDirection: Axis.horizontal,
+                          reverse: true,
+                          child: Text(
+                            _display,
+                            key: const Key('calculator-display'),
+                            maxLines: 1,
+                            softWrap: false,
+                            textAlign: TextAlign.right,
+                            style: Theme.of(context).textTheme.displayMedium,
                           ),
                         ),
                       ),
-                  ],
-                ),
-              ),
-            ],
+                    ),
+                  ),
+                  const SizedBox(height: displayGap),
+                  SizedBox(
+                    height: keypadHeight,
+                    child: Column(
+                      children: [
+                        for (var row = 0; row < 4; row++) ...[
+                          SizedBox(
+                            height: keyHeight,
+                            child: Row(
+                              children: [
+                                for (var column = 0; column < 4; column++) ...[
+                                  Expanded(
+                                    child: Semantics(
+                                      label: _semanticLabel(
+                                        labels[(row * 4) + column],
+                                      ),
+                                      button: true,
+                                      excludeSemantics: true,
+                                      child: FilledButton(
+                                        key: Key(
+                                          <String>[
+                                            'calculator-key-',
+                                            labels[(row * 4) + column],
+                                          ].join(),
+                                        ),
+                                        style: _buttonStyle(
+                                          context,
+                                          _roleFor(labels[(row * 4) + column]),
+                                        ),
+                                        onPressed: () =>
+                                            _press(labels[(row * 4) + column]),
+                                        child: Text(labels[(row * 4) + column]),
+                                      ),
+                                    ),
+                                  ),
+                                  if (column != 3) const SizedBox(width: gap),
+                                ],
+                              ],
+                            ),
+                          ),
+                          if (row != 3) const SizedBox(height: gap),
+                        ],
+                      ],
+                    ),
+                  ),
+                ],
+              );
+            },
           ),
         ),
       ),
     );
   }
 }
+
+enum _CalculatorKeyRole { number, operator, destructive, equals }
