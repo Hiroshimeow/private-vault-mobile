@@ -25,6 +25,25 @@ void main() {
     expect(activity, contains('setComponentEnabledSetting'));
   });
 
+  test(
+    'Flutter launch shim stays out of ordinary launcher resolution',
+    () async {
+      final manifest = await File('android/app/src/main/AndroidManifest.xml')
+          .readAsString();
+      final mainActivity = RegExp(
+        r'<activity\s+android:name="\.MainActivity"[\s\S]*?</activity>',
+      ).firstMatch(manifest)?.group(0);
+
+      expect(mainActivity, isNotNull);
+      expect(mainActivity, contains('android.intent.action.MAIN'));
+      expect(mainActivity, contains('android.intent.category.LAUNCHER'));
+      expect(
+        mainActivity,
+        contains('android:scheme="private-vault-flutter-tool"'),
+      );
+    },
+  );
+
   test('iOS biometric usage string is declared', () async {
     final plist = await File('ios/Runner/Info.plist').readAsString();
 

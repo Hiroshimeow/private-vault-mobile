@@ -23,6 +23,17 @@
               android:name="io.flutter.embedding.android.NormalTheme"
               android:resource="@style/NormalTheme"
               />
+            <!--
+              Flutter 3.47.4 discovers Android launch activities by scanning
+              <activity> elements and does not inspect <activity-alias>.
+              The data scheme keeps this filter out of ordinary launcher
+              resolution while Flutter can still start MainActivity explicitly.
+            -->
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN"/>
+                <category android:name="android.intent.category.LAUNCHER"/>
+                <data android:scheme="private-vault-flutter-tool"/>
+            </intent-filter>
         </activity>
 
         <activity-alias
