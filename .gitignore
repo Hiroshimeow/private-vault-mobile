@@ -1,0 +1,24 @@
+# Local tooling and generated state
+.tooling/
+.plan/
+.dart_tool/
+.packages
+.pub/
+build/
+coverage/
+.flutter-plugins
+.flutter-plugins-dependencies
+
+# IDE
+.idea/
+.vscode/
+*.iml
+
+# Flutter/Dart
+**/doc/api/
+**/ios/Flutter/.last_build_id
+
+# Platform local files
+android/local.properties
+ios/Flutter/Generated.xcconfig
+ios/Flutter/ephemeral/
