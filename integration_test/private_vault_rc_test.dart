@@ -13,7 +13,7 @@ import 'package:private_vault_mobile/features/browser/browser_profiles.dart';
 import 'package:private_vault_mobile/features/settings/app_settings.dart';
 import 'package:private_vault_mobile/features/vault/vault_repository.dart';
 
-class _Unlock implements UnlockService {
+class _Unlock implements UnlockService, PinLengthAwareUnlockService {
   @override
   Future<void> configure(String pin) async {}
 
@@ -21,7 +21,10 @@ class _Unlock implements UnlockService {
   Future<bool> isConfigured() async => true;
 
   @override
-  Future<bool> verify(String candidate) async => candidate == '482951';
+  Future<int?> configuredPinLength() async => 4;
+
+  @override
+  Future<bool> verify(String candidate) async => candidate == '0000';
 }
 
 class _Biometric implements BiometricUnlock {
@@ -65,16 +68,18 @@ void main() {
     expect(find.text('Calculator'), findsOneWidget);
     expect(find.text('Vault'), findsNothing);
 
-    await tester.longPress(find.byKey(const Key('cover-title')));
+    for (final digit in ['0', '0', '0', '1']) {
+      await tester.tap(find.byKey(Key('calculator-key-$digit')));
+    }
+    await tester.pump(const Duration(milliseconds: 300));
     await tester.pumpAndSettle();
-    await tester.enterText(find.byKey(const Key('unlock-pin')), '000000');
-    await tester.tap(find.widgetWithText(FilledButton, 'Unlock'));
-    await tester.pumpAndSettle();
-    expect(find.text('PIN not accepted'), findsOneWidget);
+    expect(find.text('Calculator'), findsOneWidget);
     expect(find.text('Vault'), findsNothing);
 
-    await tester.enterText(find.byKey(const Key('unlock-pin')), '482951');
-    await tester.tap(find.widgetWithText(FilledButton, 'Unlock'));
+    for (var index = 0; index < 4; index++) {
+      await tester.tap(find.byKey(const Key('calculator-key-0')));
+    }
+    await tester.pump(const Duration(milliseconds: 300));
     await tester.pumpAndSettle();
     expect(find.byTooltip('Lock now'), findsOneWidget);
 
@@ -85,9 +90,10 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('Calculator'), findsOneWidget);
 
-    await tester.longPress(find.byKey(const Key('cover-title')));
-    await tester.pumpAndSettle();
-    await tester.tap(find.widgetWithText(OutlinedButton, 'Use biometrics'));
+    for (var index = 0; index < 4; index++) {
+      await tester.tap(find.byKey(const Key('calculator-key-0')));
+    }
+    await tester.pump(const Duration(milliseconds: 300));
     await tester.pumpAndSettle();
     expect(find.byTooltip('Lock now'), findsOneWidget);
 
