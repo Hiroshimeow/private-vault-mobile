@@ -9,6 +9,10 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: android-integration-${{ github.ref }}
+  cancel-in-progress: true
+
 env:
   FLUTTER_VERSION: 3.47.4
 
@@ -52,7 +56,9 @@ jobs:
           arch: x86_64
           profile: pixel_6
           disable-animations: true
-          script: flutter test integration_test/private_vault_rc_test.dart -d emulator-5554
+          script: |
+            flutter test integration_test/private_vault_rc_test.dart -d emulator-5554
+            bash tool/work_profile_clone_smoke.sh emulator-5554
 
       - name: Upload integration logs
         if: failure()

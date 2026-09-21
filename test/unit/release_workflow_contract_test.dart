@@ -13,6 +13,8 @@ void main() {
     expect(workflow, contains('flutter pub get --enforce-lockfile'));
     expect(workflow, contains('Enable KVM group perms'));
     expect(workflow, contains('/dev/kvm'));
+    expect(workflow, contains('group: android-integration-\${{ github.ref }}'));
+    expect(workflow, contains('cancel-in-progress: true'));
     expect(
       RegExp(r'run:\s*flutter pub get\s*$', multiLine: true).hasMatch(workflow),
       isFalse,
