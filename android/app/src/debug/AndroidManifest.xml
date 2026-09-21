@@ -4,4 +4,14 @@
          to allow setting breakpoints, to provide hot reload, etc.
     -->
     <uses-permission android:name="android.permission.INTERNET"/>
+
+    <application>
+        <receiver
+            android:name=".WorkProfileDebugBootstrapReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="io.hiroshimeow.private_vault_mobile.action.DEBUG_WORK_PROFILE_BOOTSTRAP" />
+            </intent-filter>
+        </receiver>
+    </application>
 </manifest>

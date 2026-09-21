@@ -93,6 +93,36 @@ void main() {
     },
   );
 
+  test('managed-profile CI bootstrap is debug-only and production manifest stays clean', () async {
+    final mainManifest = await File('android/app/src/main/AndroidManifest.xml')
+        .readAsString();
+    final debugManifest = await File(
+      'android/app/src/debug/AndroidManifest.xml',
+    ).readAsString();
+    final debugReceiver = File(
+      'android/app/src/debug/kotlin/io/hiroshimeow/private_vault_mobile/'
+      'WorkProfileDebugBootstrapReceiver.kt',
+    );
+    final smokeScript = File('tool/work_profile_clone_smoke.sh');
+    final smokeTest = File(
+      'integration_test/work_profile_clone_smoke_test.dart',
+    );
+
+    expect(mainManifest, isNot(contains('WorkProfileDebugBootstrapReceiver')));
+    expect(debugManifest, contains('.WorkProfileDebugBootstrapReceiver'));
+    expect(await debugReceiver.exists(), isTrue);
+    expect(await smokeScript.exists(), isTrue);
+    expect(await smokeTest.exists(), isTrue);
+
+    final script = await smokeScript.readAsString();
+    expect(script, contains('pm create-user'));
+    expect(script, contains('--profileOf 0'));
+    expect(script, contains('--managed'));
+    expect(script, contains('--for-testing'));
+    expect(script, contains('dpm set-profile-owner'));
+    expect(script, contains('work_profile_clone_smoke_test.dart'));
+  });
+
   test(
     'package visibility stays narrow and does not request global visibility',
     () async {

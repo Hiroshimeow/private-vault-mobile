@@ -183,23 +183,19 @@ class WorkProfileResultReceiver : BroadcastReceiver() {
     }
 }
 
-class PrivateVaultDeviceAdminReceiver : DeviceAdminReceiver() {
-    override fun onProfileProvisioningComplete(context: Context, intent: Intent) {
+internal object WorkProfileProvisioningConfigurator {
+    fun enableProfile(context: Context) {
+        val dpm = context.getSystemService(DevicePolicyManager::class.java)
+        val admin = ComponentName(context, PrivateVaultDeviceAdminReceiver::class.java)
+        if (!dpm.isProfileOwnerApp(context.packageName)) return
+        dpm.setProfileEnabled(admin)
+    }
+
+    fun configure(context: Context, controlToken: String) {
         val dpm = context.getSystemService(DevicePolicyManager::class.java)
         val admin = ComponentName(context, PrivateVaultDeviceAdminReceiver::class.java)
         if (!dpm.isProfileOwnerApp(context.packageName)) return
 
-        @Suppress("DEPRECATION")
-        val provisioningExtras =
-            intent.getParcelableExtra(
-                DevicePolicyManager.EXTRA_PROVISIONING_ADMIN_EXTRAS_BUNDLE,
-            ) as? PersistableBundle
-        val controlToken =
-            provisioningExtras?.getString(WorkProfileProtocol.PROVISIONING_TOKEN_KEY)
-        if (controlToken.isNullOrBlank()) {
-            dpm.setProfileEnabled(admin)
-            return
-        }
         WorkProfileControlToken.store(context, controlToken)
 
         val bridge = ComponentName(context, WorkProfileBridgeActivity::class.java)
@@ -222,6 +218,26 @@ class PrivateVaultDeviceAdminReceiver : DeviceAdminReceiver() {
         }
         dpm.addUserRestriction(admin, UserManager.DISALLOW_CROSS_PROFILE_COPY_PASTE)
         dpm.setProfileEnabled(admin)
+    }
+}
+
+class PrivateVaultDeviceAdminReceiver : DeviceAdminReceiver() {
+    override fun onProfileProvisioningComplete(context: Context, intent: Intent) {
+        val dpm = context.getSystemService(DevicePolicyManager::class.java)
+        if (!dpm.isProfileOwnerApp(context.packageName)) return
+
+        @Suppress("DEPRECATION")
+        val provisioningExtras =
+            intent.getParcelableExtra(
+                DevicePolicyManager.EXTRA_PROVISIONING_ADMIN_EXTRAS_BUNDLE,
+            ) as? PersistableBundle
+        val controlToken =
+            provisioningExtras?.getString(WorkProfileProtocol.PROVISIONING_TOKEN_KEY)
+        if (controlToken.isNullOrBlank()) {
+            WorkProfileProvisioningConfigurator.enableProfile(context)
+            return
+        }
+        WorkProfileProvisioningConfigurator.configure(context, controlToken)
     }
 }
 
