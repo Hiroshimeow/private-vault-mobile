@@ -51,6 +51,9 @@ class ProvisioningWorkProfileClient implements WorkProfileClient {
 
 class ReadyWorkProfileClient implements WorkProfileClient {
   int destroyCalls = 0;
+  int cloneCalls = 0;
+  int launchCalls = 0;
+  String? lastPackage;
 
   @override
   Future<WorkProfileCapability> getCapability() async =>
@@ -95,11 +98,19 @@ class ReadyWorkProfileClient implements WorkProfileClient {
   }
 
   @override
-  Future<WorkProfileOperationResult> clone(String packageName) async =>
-      const WorkProfileOperationResult.success();
+  Future<WorkProfileOperationResult> clone(String packageName) async {
+    cloneCalls += 1;
+    lastPackage = packageName;
+    return const WorkProfileOperationResult.success();
+  }
+
   @override
-  Future<WorkProfileOperationResult> launch(String packageName) async =>
-      const WorkProfileOperationResult.success();
+  Future<WorkProfileOperationResult> launch(String packageName) async {
+    launchCalls += 1;
+    lastPackage = packageName;
+    return const WorkProfileOperationResult.success();
+  }
+
   @override
   Future<WorkProfileOperationResult> setHidden(
     String packageName,
@@ -130,17 +141,15 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    expect(find.text('Set up work profile'), findsOneWidget);
-    await tester.tap(find.text('Set up work profile'));
+    expect(find.text('Enable isolated apps'), findsOneWidget);
+    await tester.tap(find.text('Enable isolated apps'));
     await tester.pumpAndSettle();
 
     expect(find.text('Isolated apps'), findsOneWidget);
     expect(find.text('Remove work profile'), findsOneWidget);
   });
 
-  testWidgets('ordinary personal app exposes confirmation-required state', (
-    tester,
-  ) async {
+  testWidgets('personal view exposes one-tap clone action', (tester) async {
     final client = ReadyWorkProfileClient();
     await tester.pumpWidget(
       MaterialApp(
@@ -149,13 +158,41 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    expect(
-      find.textContaining('Android confirmation required'),
-      findsOneWidget,
-    );
+    expect(find.text('Personal'), findsOneWidget);
+    expect(find.text('Isolated'), findsOneWidget);
+    expect(find.text('Personal only'), findsOneWidget);
+    expect(find.widgetWithText(FilledButton, 'Clone'), findsOneWidget);
+
+    await tester.tap(find.widgetWithText(FilledButton, 'Clone'));
+    await tester.pumpAndSettle();
+
+    expect(client.cloneCalls, 1);
+    expect(client.lastPackage, 'personal.app');
   });
 
-  testWidgets('ready app exposes work-profile controls and profile removal', (
+  testWidgets('isolated view opens app by tapping its row', (tester) async {
+    final client = ReadyWorkProfileClient();
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(body: WorkProfileHome(client: client)),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('Isolated'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Example'), findsOneWidget);
+    expect(find.text('Personal only'), findsNothing);
+
+    await tester.tap(find.text('Example'));
+    await tester.pumpAndSettle();
+
+    expect(client.launchCalls, 1);
+    expect(client.lastPackage, 'example.app');
+  });
+
+  testWidgets('isolated app exposes lifecycle controls and profile removal', (
     tester,
   ) async {
     final client = ReadyWorkProfileClient();
@@ -166,12 +203,13 @@ void main() {
     );
     await tester.pumpAndSettle();
 
+    await tester.tap(find.text('Isolated'));
+    await tester.pumpAndSettle();
     expect(find.text('Remove work profile'), findsOneWidget);
 
     await tester.tap(find.byType(PopupMenuButton<String>));
     await tester.pumpAndSettle();
 
-    expect(find.text('Open'), findsOneWidget);
     expect(find.text('Freeze'), findsOneWidget);
     expect(find.text('Hide'), findsOneWidget);
     expect(find.text('Uninstall'), findsOneWidget);

@@ -4,6 +4,8 @@ import 'package:flutter/material.dart';
 import 'package:private_vault_mobile/features/apps/work_profile_client.dart';
 import 'package:private_vault_mobile/features/apps/work_profile_models.dart';
 
+enum _AppScope { personal, isolated }
+
 class WorkProfileHome extends StatefulWidget {
   const WorkProfileHome({super.key, required this.client});
 
@@ -18,6 +20,7 @@ class _WorkProfileHomeState extends State<WorkProfileHome> {
   List<ManagedAppState> _apps = const [];
   bool _loading = true;
   String? _message;
+  _AppScope _scope = _AppScope.personal;
 
   @override
   void initState() {
@@ -174,12 +177,27 @@ class _WorkProfileHomeState extends State<WorkProfileHome> {
             ? FilledButton.icon(
                 onPressed: _provision,
                 icon: const Icon(Icons.add_business_outlined),
-                label: const Text('Set up work profile'),
+                label: const Text('Enable isolated apps'),
+              )
+            : capability.profileState == WorkProfileState.quiet
+            ? OutlinedButton.icon(
+                onPressed: _refresh,
+                icon: const Icon(Icons.refresh),
+                label: const Text('Check again'),
               )
             : null,
         footer: _message,
       );
     }
+
+    final visibleApps = _apps
+        .where(
+          (app) => switch (_scope) {
+            _AppScope.personal => app.presentPersonal,
+            _AppScope.isolated => app.presentWork,
+          },
+        )
+        .toList(growable: false);
 
     return RefreshIndicator(
       onRefresh: _refresh,
@@ -190,38 +208,65 @@ class _WorkProfileHomeState extends State<WorkProfileHome> {
             'Isolated apps',
             style: Theme.of(context).textTheme.headlineSmall,
           ),
-          const SizedBox(height: 8),
-          const Text(
-            'Clones run as Android work-profile apps outside Private Vault. '
-            'Locking Private Vault does not stop an already-running clone.',
+          const SizedBox(height: 12),
+          SegmentedButton<_AppScope>(
+            segments: const [
+              ButtonSegment(
+                value: _AppScope.personal,
+                icon: Icon(Icons.phone_android_outlined),
+                label: Text('Personal'),
+              ),
+              ButtonSegment(
+                value: _AppScope.isolated,
+                icon: Icon(Icons.work_outline),
+                label: Text('Isolated'),
+              ),
+            ],
+            selected: {_scope},
+            onSelectionChanged: (selection) {
+              if (selection.isEmpty) return;
+              setState(() => _scope = selection.first);
+            },
+          ),
+          const SizedBox(height: 12),
+          Text(
+            _scope == _AppScope.personal
+                ? 'Choose an app to create an isolated Android Work Profile copy.'
+                : 'Tap an app to open it. Freeze, hide, and uninstall affect only the isolated copy.',
           ),
           if (_message != null) ...[
             const SizedBox(height: 12),
             Text(_message!, style: Theme.of(context).textTheme.bodySmall),
           ],
-          const SizedBox(height: 12),
+          const SizedBox(height: 16),
+          if (visibleApps.isEmpty)
+            Card(
+              child: Padding(
+                padding: const EdgeInsets.all(20),
+                child: Text(
+                  _scope == _AppScope.personal
+                      ? 'No launchable personal apps are available to isolate.'
+                      : 'No isolated apps yet. Switch to Personal and choose Clone.',
+                ),
+              ),
+            )
+          else
+            for (final app in visibleApps)
+              _AppTile(
+                app: app,
+                scope: _scope,
+                client: widget.client,
+                onRun: _run,
+              ),
+          const SizedBox(height: 24),
           Align(
             alignment: Alignment.centerLeft,
-            child: OutlinedButton.icon(
+            child: TextButton.icon(
               onPressed: _removeProfile,
               icon: const Icon(Icons.delete_forever_outlined),
               label: const Text('Remove work profile'),
             ),
           ),
-          const SizedBox(height: 16),
-          if (_apps.isEmpty)
-            const Card(
-              child: Padding(
-                padding: EdgeInsets.all(20),
-                child: Text(
-                  'No visible apps are available in this profile yet. '
-                  'Some devices require installing through Play or the OEM store.',
-                ),
-              ),
-            )
-          else
-            for (final app in _apps)
-              _AppTile(app: app, client: widget.client, onRun: _run),
         ],
       ),
     );
@@ -231,11 +276,13 @@ class _WorkProfileHomeState extends State<WorkProfileHome> {
 class _AppTile extends StatelessWidget {
   const _AppTile({
     required this.app,
+    required this.scope,
     required this.client,
     required this.onRun,
   });
 
   final ManagedAppState app;
+  final _AppScope scope;
   final WorkProfileClient client;
   final Future<void> Function(
     ManagedAppState,
@@ -245,25 +292,33 @@ class _AppTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final isolated = scope == _AppScope.isolated;
     return Card(
       child: ListTile(
-        leading: const Icon(Icons.apps),
+        onTap: isolated
+            ? () => unawaited(onRun(app, () => client.launch(app.packageName)))
+            : null,
+        leading: Icon(isolated ? Icons.work_outline : Icons.apps_outlined),
         title: Text(app.label),
         subtitle: Text(
-          app.presentWork
+          isolated
               ? app.suspended
-                    ? 'Installed in work profile · suspended'
-                    : 'Installed in work profile'
+                    ? 'Frozen · tap to open'
+                    : app.hidden
+                    ? 'Hidden · tap to open'
+                    : 'Tap to open'
+              : app.presentWork
+              ? 'Already isolated'
               : app.installerActionRequired
-              ? 'Personal app · Android confirmation required'
-              : 'Personal app · available for isolation',
+              ? 'Android will ask you to confirm installation'
+              : app.systemApp
+              ? 'System app · ready to enable in isolated profile'
+              : 'Ready to isolate',
         ),
-        trailing: app.presentWork
+        trailing: isolated
             ? PopupMenuButton<String>(
                 onSelected: (value) {
-                  if (value == 'launch') {
-                    unawaited(onRun(app, () => client.launch(app.packageName)));
-                  } else if (value == 'suspend') {
+                  if (value == 'suspend') {
                     unawaited(
                       onRun(
                         app,
@@ -287,7 +342,6 @@ class _AppTile extends StatelessWidget {
                   }
                 },
                 itemBuilder: (_) => [
-                  const PopupMenuItem(value: 'launch', child: Text('Open')),
                   PopupMenuItem(
                     value: 'suspend',
                     child: Text(app.suspended ? 'Unfreeze' : 'Freeze'),
@@ -303,12 +357,13 @@ class _AppTile extends StatelessWidget {
                 ],
               )
             : app.canClone
-            ? IconButton(
-                tooltip: 'Clone to work profile',
-                icon: const Icon(Icons.copy_all_outlined),
+            ? FilledButton(
                 onPressed: () =>
                     unawaited(onRun(app, () => client.clone(app.packageName))),
+                child: const Text('Clone'),
               )
+            : app.presentWork
+            ? const Icon(Icons.check_circle_outline)
             : null,
       ),
     );
