@@ -618,7 +618,11 @@ class WorkProfileBridgeActivity : Activity() {
 
     private fun packageState(targetPackage: String): NativeManagedAppState? {
         return try {
-            val app = packageManager.getApplicationInfo(targetPackage, 0)
+            val app = packageManager.getApplicationInfo(
+                targetPackage,
+                PackageManager.MATCH_DISABLED_COMPONENTS or
+                    PackageManager.MATCH_UNINSTALLED_PACKAGES,
+            )
             val hidden = runCatching { dpm.isApplicationHidden(admin, targetPackage) }.getOrDefault(false)
             NativeManagedAppState(
                 packageName = targetPackage,

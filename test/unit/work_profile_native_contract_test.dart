@@ -89,6 +89,8 @@ void main() {
       expect(policy, contains('NativeWorkProfileState.QUIET'));
       expect(adapter, isNot(contains('requestQuietModeEnabled')));
       expect(bridge, contains('setApplicationHidden'));
+      expect(bridge, contains('MATCH_UNINSTALLED_PACKAGES'));
+      expect(bridge, contains('MATCH_DISABLED_COMPONENTS'));
       expect(bridge, contains('setPackagesSuspended'));
       expect(bridge, contains('PACKAGE_STATE_TIMEOUT_MS'));
       expect(bridge, contains('queryIntentActivities'));
