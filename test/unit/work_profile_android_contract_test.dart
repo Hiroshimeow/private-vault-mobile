@@ -120,6 +120,11 @@ void main() {
     expect(script, contains('--managed'));
     expect(script, contains('--for-testing'));
     expect(script, contains('dpm set-profile-owner'));
+    expect(script, contains('wait_for_profile_ready'));
+    expect(script, contains('dump_diagnostics'));
+    expect(script, contains('dumpsys device_policy'));
+    expect(script, contains('pm list users'));
+    expect(script, isNot(contains('sleep 1')));
     expect(script, contains('work_profile_clone_smoke_test.dart'));
   });
 

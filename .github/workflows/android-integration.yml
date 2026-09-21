@@ -41,13 +41,23 @@ jobs:
       - name: Resolve locked dependencies
         run: flutter pub get --enforce-lockfile
 
-      - name: Enable KVM group perms
+      - name: Configure KVM when available
+        shell: bash
         run: |
-          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
-          sudo udevadm control --reload-rules
-          sudo udevadm trigger --name-match=kvm
-          test -r /dev/kvm
-          test -w /dev/kvm
+          set -u
+          if [[ -e /dev/kvm ]]; then
+            echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+            sudo udevadm control --reload-rules || true
+            sudo udevadm trigger --name-match=kvm || true
+            sudo chmod 0666 /dev/kvm || true
+            if [[ -r /dev/kvm && -w /dev/kvm ]]; then
+              echo "KVM available; emulator will use hardware acceleration."
+            else
+              echo "KVM device exists but is not accessible; emulator runner will fall back automatically."
+            fi
+          else
+            echo "KVM is not exposed on this runner; emulator runner will use software acceleration."
+          fi
 
       - name: Run RC integration on emulator
         uses: reactivecircus/android-emulator-runner@v2
@@ -56,6 +66,8 @@ jobs:
           arch: x86_64
           profile: pixel_6
           disable-animations: true
+          disable-linux-hw-accel: auto
+          emulator-boot-timeout: 900
           script: |
             flutter test integration_test/private_vault_rc_test.dart -d emulator-5554
             bash tool/work_profile_clone_smoke.sh emulator-5554
