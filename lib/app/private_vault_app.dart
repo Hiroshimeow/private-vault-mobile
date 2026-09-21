@@ -4,6 +4,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:private_vault_mobile/app/private_vault_theme.dart';
 import 'package:private_vault_mobile/features/auth/biometric_unlock.dart';
 import 'package:private_vault_mobile/features/auth/lock_controller.dart';
 import 'package:private_vault_mobile/features/auth/secure_unlock_service.dart';
@@ -189,11 +190,38 @@ class _PrivateVaultAppState extends State<PrivateVaultApp>
                 mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  Text(
-                    configured ? 'Enter PIN' : 'Set access PIN',
-                    style: Theme.of(context).textTheme.titleLarge,
+                  Align(
+                    child: CircleAvatar(
+                      radius: 24,
+                      backgroundColor: Theme.of(context)
+                          .colorScheme
+                          .secondaryContainer,
+                      child: Icon(
+                        Icons.lock_outline,
+                        color: Theme.of(context)
+                            .colorScheme
+                            .onSecondaryContainer,
+                      ),
+                    ),
                   ),
-                  const SizedBox(height: 16),
+                  const SizedBox(height: 12),
+                  Semantics(
+                    header: true,
+                    child: Text(
+                      configured ? 'Enter PIN' : 'Set access PIN',
+                      textAlign: TextAlign.center,
+                      style: Theme.of(context).textTheme.headlineSmall,
+                    ),
+                  ),
+                  const SizedBox(height: 6),
+                  Text(
+                    configured
+                        ? 'Unlock protected content with your access PIN.'
+                        : 'Create a 6–12 digit PIN for protected content.',
+                    textAlign: TextAlign.center,
+                    style: Theme.of(context).textTheme.bodyMedium,
+                  ),
+                  const SizedBox(height: 20),
                   TextField(
                     key: const Key('unlock-pin'),
                     autofocus: true,
@@ -232,6 +260,7 @@ class _PrivateVaultAppState extends State<PrivateVaultApp>
   }
 
   Future<void> _applySettings(AppSettings next) async {
+    if (next == _settings) return;
     setState(() {
       _settings = next;
       _cover = next.cover == CoverPreference.notes
@@ -281,21 +310,8 @@ class _PrivateVaultAppState extends State<PrivateVaultApp>
       title: _cover == CoverKind.calculator ? 'Calculator' : 'Notes',
       debugShowCheckedModeBanner: false,
       themeMode: _settings.darkMode ? ThemeMode.dark : ThemeMode.light,
-      theme: ThemeData(
-        colorScheme: ColorScheme.fromSeed(
-          seedColor: const Color(0xFF536975),
-          brightness: Brightness.light,
-        ),
-        scaffoldBackgroundColor: const Color(0xFFF5F7F7),
-        useMaterial3: true,
-      ),
-      darkTheme: ThemeData(
-        colorScheme: ColorScheme.fromSeed(
-          seedColor: const Color(0xFF91A7B3),
-          brightness: Brightness.dark,
-        ),
-        useMaterial3: true,
-      ),
+      theme: PrivateVaultTheme.light(),
+      darkTheme: PrivateVaultTheme.dark(),
       home: Builder(
         builder: (materialContext) => AnimatedBuilder(
           animation: widget.lockController,
@@ -335,71 +351,81 @@ class SecretWorkspace extends StatefulWidget {
 
 class _SecretWorkspaceState extends State<SecretWorkspace> {
   int _index = 0;
+  final Set<int> _visited = {0};
+
+  void _select(int index) {
+    if (index == _index) return;
+    setState(() {
+      _index = index;
+      _visited.add(index);
+    });
+  }
+
+  Widget _page(int index) {
+    if (!_visited.contains(index)) return const SizedBox.shrink();
+    return switch (index) {
+      0 =>
+        widget.vaultRepository != null && widget.mediaService != null
+            ? VaultHome(
+                key: const ValueKey('vault-home'),
+                repository: widget.vaultRepository!,
+                media: widget.mediaService!,
+                confirmExport: widget.settings.confirmExport,
+              )
+            : const _VaultUnavailable(),
+      1 => BrowserHome(
+        key: const ValueKey('browser-home'),
+        repository: widget.vaultRepository,
+        clearOnClose: widget.settings.browserClearOnClose,
+      ),
+      _ => _SettingsHome(
+        key: const ValueKey('settings-home'),
+        settings: widget.settings,
+        disguiseBridge: widget.disguiseBridge,
+        onChanged: widget.onSettingsChanged,
+      ),
+    };
+  }
 
   @override
   Widget build(BuildContext context) {
     const labels = ['Vault', 'Browser', 'Settings'];
 
-    return Theme(
-      data: ThemeData(
-        colorScheme: ColorScheme.fromSeed(
-          seedColor: const Color(0xFF7086FF),
-          brightness: Brightness.dark,
-        ),
-        scaffoldBackgroundColor: const Color(0xFF111722),
-        useMaterial3: true,
+    return Scaffold(
+      appBar: AppBar(
+        title: Text(labels[_index]),
+        actions: [
+          IconButton(
+            onPressed: widget.onLock,
+            tooltip: 'Lock now',
+            icon: const Icon(Icons.lock_outline),
+          ),
+        ],
       ),
-      child: Scaffold(
-        appBar: AppBar(
-          title: Text(labels[_index]),
-          actions: [
-            IconButton(
-              onPressed: widget.onLock,
-              tooltip: 'Lock now',
-              icon: const Icon(Icons.lock_outline),
-            ),
-          ],
-        ),
-        body: switch (_index) {
-          0 =>
-            widget.vaultRepository != null && widget.mediaService != null
-                ? VaultHome(
-                    repository: widget.vaultRepository!,
-                    media: widget.mediaService!,
-                    confirmExport: widget.settings.confirmExport,
-                  )
-                : const _VaultUnavailable(),
-          1 => BrowserHome(
-            repository: widget.vaultRepository,
-            clearOnClose: widget.settings.browserClearOnClose,
+      body: IndexedStack(
+        index: _index,
+        children: [_page(0), _page(1), _page(2)],
+      ),
+      bottomNavigationBar: NavigationBar(
+        selectedIndex: _index,
+        onDestinationSelected: _select,
+        destinations: const [
+          NavigationDestination(
+            icon: Icon(Icons.inventory_2_outlined),
+            selectedIcon: Icon(Icons.inventory_2),
+            label: 'Vault',
           ),
-          _ => _SettingsHome(
-            settings: widget.settings,
-            disguiseBridge: widget.disguiseBridge,
-            onChanged: widget.onSettingsChanged,
+          NavigationDestination(
+            icon: Icon(Icons.language_outlined),
+            selectedIcon: Icon(Icons.language),
+            label: 'Browser',
           ),
-        },
-        bottomNavigationBar: NavigationBar(
-          selectedIndex: _index,
-          onDestinationSelected: (index) => setState(() => _index = index),
-          destinations: const [
-            NavigationDestination(
-              icon: Icon(Icons.inventory_2_outlined),
-              selectedIcon: Icon(Icons.inventory_2),
-              label: 'Vault',
-            ),
-            NavigationDestination(
-              icon: Icon(Icons.language_outlined),
-              selectedIcon: Icon(Icons.language),
-              label: 'Browser',
-            ),
-            NavigationDestination(
-              icon: Icon(Icons.tune_outlined),
-              selectedIcon: Icon(Icons.tune),
-              label: 'Settings',
-            ),
-          ],
-        ),
+          NavigationDestination(
+            icon: Icon(Icons.tune_outlined),
+            selectedIcon: Icon(Icons.tune),
+            label: 'Settings',
+          ),
+        ],
       ),
     );
   }
@@ -422,8 +448,9 @@ class _VaultUnavailable extends StatelessWidget {
   }
 }
 
-class _SettingsHome extends StatelessWidget {
+class _SettingsHome extends StatefulWidget {
   const _SettingsHome({
+    super.key,
     required this.settings,
     required this.onChanged,
     this.disguiseBridge,
@@ -434,207 +461,331 @@ class _SettingsHome extends StatelessWidget {
   final PlatformDisguiseBridge? disguiseBridge;
 
   @override
+  State<_SettingsHome> createState() => _SettingsHomeState();
+}
+
+class _SettingsHomeState extends State<_SettingsHome> {
+  late AppSettings _draft;
+  Future<DisguiseCapabilities>? _capabilities;
+
+  @override
+  void initState() {
+    super.initState();
+    _draft = widget.settings;
+    _refreshCapabilities();
+  }
+
+  @override
+  void didUpdateWidget(covariant _SettingsHome oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.settings != widget.settings && _draft != widget.settings) {
+      _draft = widget.settings;
+    }
+    if (!identical(oldWidget.disguiseBridge, widget.disguiseBridge)) {
+      _refreshCapabilities();
+    }
+  }
+
+  void _refreshCapabilities() {
+    final bridge = widget.disguiseBridge;
+    _capabilities = bridge?.capabilities();
+  }
+
+  void _commit(AppSettings next) {
+    if (next == _draft) return;
+    setState(() => _draft = next);
+    widget.onChanged(next);
+  }
+
+  void _updateDraft(AppSettings next) {
+    if (next == _draft) return;
+    setState(() => _draft = next);
+  }
+
+  @override
   Widget build(BuildContext context) {
+    final settings = _draft;
     final cover = settings.cover == CoverPreference.notes
         ? CoverKind.notes
         : CoverKind.calculator;
 
     return ListView(
-      padding: const EdgeInsets.all(20),
+      padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
       children: [
-        Text('Cover', style: Theme.of(context).textTheme.titleMedium),
-        const SizedBox(height: 8),
-        SegmentedButton<CoverKind>(
-          segments: const [
-            ButtonSegment(
-              value: CoverKind.calculator,
-              label: Text('Calculator'),
-              icon: Icon(Icons.calculate_outlined),
-            ),
-            ButtonSegment(
-              value: CoverKind.notes,
-              label: Text('Notes'),
-              icon: Icon(Icons.checklist_outlined),
-            ),
-          ],
-          selected: {cover},
-          onSelectionChanged: (selection) {
-            if (selection.isEmpty) return;
-            onChanged(
-              settings.copyWith(
-                cover: selection.first == CoverKind.notes
-                    ? CoverPreference.notes
-                    : CoverPreference.calculator,
+        _SettingsSection(
+          title: 'Cover',
+          icon: Icons.layers_outlined,
+          child: SegmentedButton<CoverKind>(
+            segments: const [
+              ButtonSegment(
+                value: CoverKind.calculator,
+                label: Text('Calculator'),
+                icon: Icon(Icons.calculate_outlined),
               ),
-            );
-          },
-        ),
-        const SizedBox(height: 20),
-        Text('Concealment', style: Theme.of(context).textTheme.titleMedium),
-        SwitchListTile(
-          contentPadding: EdgeInsets.zero,
-          title: const Text('Shake to conceal'),
-          subtitle: const Text('Locks and returns to the cover workspace.'),
-          value: settings.panicShakeEnabled,
-          onChanged: (value) =>
-              onChanged(settings.copyWith(panicShakeEnabled: value)),
-        ),
-        ListTile(
-          contentPadding: EdgeInsets.zero,
-          title: const Text('Shake sensitivity'),
-          subtitle: Slider(
-            value: settings.shakeThresholdG,
-            min: 1.5,
-            max: 4.5,
-            divisions: 30,
-            label: settings.shakeThresholdG.toStringAsFixed(1),
-            onChanged: settings.panicShakeEnabled
-                ? (value) =>
-                      onChanged(settings.copyWith(shakeThresholdG: value))
-                : null,
-          ),
-        ),
-        SwitchListTile(
-          contentPadding: EdgeInsets.zero,
-          title: const Text('Face-down conceal'),
-          subtitle: const Text(
-            'Locks after the phone stays face-down for the configured delay.',
-          ),
-          value: settings.panicFaceDownEnabled,
-          onChanged: (value) =>
-              onChanged(settings.copyWith(panicFaceDownEnabled: value)),
-        ),
-        ListTile(
-          contentPadding: EdgeInsets.zero,
-          title: const Text('Face-down delay'),
-          subtitle: Slider(
-            value: settings.faceDownDelayMs.toDouble(),
-            min: 500,
-            max: 3000,
-            divisions: 10,
-            label: '${(settings.faceDownDelayMs / 1000).toStringAsFixed(1)} s',
-            onChanged: settings.panicFaceDownEnabled
-                ? (value) => onChanged(
-                    settings.copyWith(faceDownDelayMs: value.round()),
-                  )
-                : null,
-          ),
-        ),
-        DropdownButtonFormField<int>(
-          initialValue: settings.autoLockSeconds,
-          decoration: const InputDecoration(labelText: 'Lock after background'),
-          items: const [
-            DropdownMenuItem(value: 0, child: Text('Immediately')),
-            DropdownMenuItem(value: 15, child: Text('15 seconds')),
-            DropdownMenuItem(value: 30, child: Text('30 seconds')),
-            DropdownMenuItem(value: 60, child: Text('1 minute')),
-            DropdownMenuItem(value: 300, child: Text('5 minutes')),
-          ],
-          onChanged: (value) {
-            if (value != null) {
-              onChanged(settings.copyWith(autoLockSeconds: value));
-            }
-          },
-        ),
-        const SizedBox(height: 20),
-        Text('Access', style: Theme.of(context).textTheme.titleMedium),
-        SwitchListTile(
-          contentPadding: EdgeInsets.zero,
-          title: const Text('Biometric unlock'),
-          subtitle: const Text('PIN remains the fallback and key owner.'),
-          value: settings.biometricsEnabled,
-          onChanged: (value) =>
-              onChanged(settings.copyWith(biometricsEnabled: value)),
-        ),
-        const SizedBox(height: 12),
-        Text('Browser', style: Theme.of(context).textTheme.titleMedium),
-        SwitchListTile(
-          contentPadding: EdgeInsets.zero,
-          title: const Text('Clear browser data on close'),
-          value: settings.browserClearOnClose,
-          onChanged: (value) =>
-              onChanged(settings.copyWith(browserClearOnClose: value)),
-        ),
-        const SizedBox(height: 12),
-        Text('Export', style: Theme.of(context).textTheme.titleMedium),
-        SwitchListTile(
-          contentPadding: EdgeInsets.zero,
-          title: const Text('Confirm before export'),
-          value: settings.confirmExport,
-          onChanged: (value) =>
-              onChanged(settings.copyWith(confirmExport: value)),
-        ),
-        const SizedBox(height: 12),
-        Text('Appearance', style: Theme.of(context).textTheme.titleMedium),
-        SwitchListTile(
-          contentPadding: EdgeInsets.zero,
-          title: const Text('Dark mode'),
-          value: settings.darkMode,
-          onChanged: (value) => onChanged(settings.copyWith(darkMode: value)),
-        ),
-        if (disguiseBridge != null) ...[
-          const SizedBox(height: 12),
-          Text('Launcher', style: Theme.of(context).textTheme.titleMedium),
-          FutureBuilder<DisguiseCapabilities>(
-            future: disguiseBridge!.capabilities(),
-            builder: (context, snapshot) {
-              final capabilities =
-                  snapshot.data ?? const DisguiseCapabilities();
-              if (!capabilities.isSupported) {
-                return const ListTile(
-                  contentPadding: EdgeInsets.zero,
-                  title: Text('Launcher disguise unavailable'),
-                  subtitle: Text(
-                    'Support depends on the installed platform and build.',
-                  ),
-                );
-              }
-              final description = capabilities.androidLauncherAliases
-                  ? 'Android switches between predeclared launcher aliases and labels.'
-                  : 'iOS changes only the predeclared icon. The app display name cannot change at runtime.';
-              return Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    description,
-                    style: Theme.of(context).textTheme.bodySmall,
-                  ),
-                  const SizedBox(height: 8),
-                  Row(
-                    children: [
-                      Expanded(
-                        child: OutlinedButton(
-                          onPressed: () {
-                            unawaited(
-                              disguiseBridge!.apply(DisguiseChoice.calculator),
-                            );
-                          },
-                          child: const Text('Calculator'),
-                        ),
-                      ),
-                      const SizedBox(width: 8),
-                      Expanded(
-                        child: OutlinedButton(
-                          onPressed: () {
-                            unawaited(
-                              disguiseBridge!.apply(DisguiseChoice.notes),
-                            );
-                          },
-                          child: Text(
-                            capabilities.androidLauncherAliases
-                                ? 'Notes'
-                                : 'Notes icon',
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
-                ],
+              ButtonSegment(
+                value: CoverKind.notes,
+                label: Text('Notes'),
+                icon: Icon(Icons.checklist_outlined),
+              ),
+            ],
+            selected: {cover},
+            onSelectionChanged: (selection) {
+              if (selection.isEmpty) return;
+              _commit(
+                settings.copyWith(
+                  cover: selection.first == CoverKind.notes
+                      ? CoverPreference.notes
+                      : CoverPreference.calculator,
+                ),
               );
             },
           ),
+        ),
+        const SizedBox(height: 12),
+        _SettingsSection(
+          title: 'Concealment',
+          icon: Icons.visibility_off_outlined,
+          child: Column(
+            children: [
+              SwitchListTile(
+                contentPadding: EdgeInsets.zero,
+                title: const Text('Shake to conceal'),
+                subtitle: const Text(
+                  'Locks and returns to the cover workspace.',
+                ),
+                value: settings.panicShakeEnabled,
+                onChanged: (value) =>
+                    _commit(settings.copyWith(panicShakeEnabled: value)),
+              ),
+              ListTile(
+                contentPadding: EdgeInsets.zero,
+                title: const Text('Shake sensitivity'),
+                subtitle: Slider(
+                  key: const Key('settings-shake-slider'),
+                  value: settings.shakeThresholdG,
+                  min: 1.5,
+                  max: 4.5,
+                  divisions: 30,
+                  label: settings.shakeThresholdG.toStringAsFixed(1),
+                  onChanged: settings.panicShakeEnabled
+                      ? (value) => _updateDraft(
+                          settings.copyWith(shakeThresholdG: value),
+                        )
+                      : null,
+                  onChangeEnd: settings.panicShakeEnabled
+                      ? (_) => widget.onChanged(_draft)
+                      : null,
+                ),
+              ),
+              SwitchListTile(
+                contentPadding: EdgeInsets.zero,
+                title: const Text('Face-down conceal'),
+                subtitle: const Text(
+                  'Locks after the phone stays face-down for the configured delay.',
+                ),
+                value: settings.panicFaceDownEnabled,
+                onChanged: (value) =>
+                    _commit(settings.copyWith(panicFaceDownEnabled: value)),
+              ),
+              ListTile(
+                contentPadding: EdgeInsets.zero,
+                title: const Text('Face-down delay'),
+                subtitle: Slider(
+                  key: const Key('settings-face-down-slider'),
+                  value: settings.faceDownDelayMs.toDouble(),
+                  min: 500,
+                  max: 3000,
+                  divisions: 10,
+                  label:
+                      '${(settings.faceDownDelayMs / 1000).toStringAsFixed(1)} s',
+                  onChanged: settings.panicFaceDownEnabled
+                      ? (value) => _updateDraft(
+                          settings.copyWith(faceDownDelayMs: value.round()),
+                        )
+                      : null,
+                  onChangeEnd: settings.panicFaceDownEnabled
+                      ? (_) => widget.onChanged(_draft)
+                      : null,
+                ),
+              ),
+              const SizedBox(height: 4),
+              DropdownButtonFormField<int>(
+                initialValue: settings.autoLockSeconds,
+                decoration: const InputDecoration(
+                  labelText: 'Lock after background',
+                ),
+                items: const [
+                  DropdownMenuItem(value: 0, child: Text('Immediately')),
+                  DropdownMenuItem(value: 15, child: Text('15 seconds')),
+                  DropdownMenuItem(value: 30, child: Text('30 seconds')),
+                  DropdownMenuItem(value: 60, child: Text('1 minute')),
+                  DropdownMenuItem(value: 300, child: Text('5 minutes')),
+                ],
+                onChanged: (value) {
+                  if (value != null) {
+                    _commit(settings.copyWith(autoLockSeconds: value));
+                  }
+                },
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 12),
+        _SettingsSection(
+          title: 'Access',
+          icon: Icons.fingerprint,
+          child: SwitchListTile(
+            contentPadding: EdgeInsets.zero,
+            title: const Text('Biometric unlock'),
+            subtitle: const Text('PIN remains the fallback and key owner.'),
+            value: settings.biometricsEnabled,
+            onChanged: (value) =>
+                _commit(settings.copyWith(biometricsEnabled: value)),
+          ),
+        ),
+        const SizedBox(height: 12),
+        _SettingsSection(
+          title: 'Data handling',
+          icon: Icons.shield_outlined,
+          child: Column(
+            children: [
+              SwitchListTile(
+                contentPadding: EdgeInsets.zero,
+                title: const Text('Clear browser data on close'),
+                value: settings.browserClearOnClose,
+                onChanged: (value) =>
+                    _commit(settings.copyWith(browserClearOnClose: value)),
+              ),
+              SwitchListTile(
+                contentPadding: EdgeInsets.zero,
+                title: const Text('Confirm before export'),
+                value: settings.confirmExport,
+                onChanged: (value) =>
+                    _commit(settings.copyWith(confirmExport: value)),
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 12),
+        _SettingsSection(
+          title: 'Appearance',
+          icon: Icons.contrast_outlined,
+          child: SwitchListTile(
+            contentPadding: EdgeInsets.zero,
+            title: const Text('Dark mode'),
+            value: settings.darkMode,
+            onChanged: (value) => _commit(settings.copyWith(darkMode: value)),
+          ),
+        ),
+        if (widget.disguiseBridge != null) ...[
+          const SizedBox(height: 12),
+          _SettingsSection(
+            title: 'Launcher',
+            icon: Icons.apps_outlined,
+            child: FutureBuilder<DisguiseCapabilities>(
+              future: _capabilities,
+              builder: (context, snapshot) {
+                final capabilities =
+                    snapshot.data ?? const DisguiseCapabilities();
+                if (!capabilities.isSupported) {
+                  return const ListTile(
+                    contentPadding: EdgeInsets.zero,
+                    title: Text('Launcher disguise unavailable'),
+                    subtitle: Text(
+                      'Support depends on the installed platform and build.',
+                    ),
+                  );
+                }
+                final description = capabilities.androidLauncherAliases
+                    ? 'Android switches between predeclared launcher aliases and labels.'
+                    : 'iOS changes only the predeclared icon. The app display name cannot change at runtime.';
+                return Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      description,
+                      style: Theme.of(context).textTheme.bodySmall,
+                    ),
+                    const SizedBox(height: 12),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: OutlinedButton(
+                            onPressed: () {
+                              unawaited(
+                                widget.disguiseBridge!.apply(
+                                  DisguiseChoice.calculator,
+                                ),
+                              );
+                            },
+                            child: const Text('Calculator'),
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: OutlinedButton(
+                            onPressed: () {
+                              unawaited(
+                                widget.disguiseBridge!.apply(
+                                  DisguiseChoice.notes,
+                                ),
+                              );
+                            },
+                            child: Text(
+                              capabilities.androidLauncherAliases
+                                  ? 'Notes'
+                                  : 'Notes icon',
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
+                );
+              },
+            ),
+          ),
         ],
       ],
+    );
+  }
+}
+
+class _SettingsSection extends StatelessWidget {
+  const _SettingsSection({
+    required this.title,
+    required this.icon,
+    required this.child,
+  });
+
+  final String title;
+  final IconData icon;
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    return Semantics(
+      label: '$title settings',
+      container: true,
+      child: Card(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(16, 14, 16, 16),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Row(
+                children: [
+                  Icon(icon, size: 20),
+                  const SizedBox(width: 8),
+                  Text(title, style: Theme.of(context).textTheme.titleMedium),
+                ],
+              ),
+              const SizedBox(height: 10),
+              child,
+            ],
+          ),
+        ),
+      ),
     );
   }
 }

@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
+import 'package:private_vault_mobile/app/private_vault_theme.dart';
 import 'package:private_vault_mobile/features/media/media_vault_service.dart';
 import 'package:private_vault_mobile/features/vault/vault_repository.dart';
 
@@ -140,6 +141,9 @@ class _VaultHomeState extends State<VaultHome> {
           onDelete: () => _confirmDelete(item),
         ),
       );
+      if (item.kind == VaultItemKind.unknown && mounted) {
+        await _reload();
+      }
     } on Object {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
@@ -222,74 +226,115 @@ class _VaultHomeState extends State<VaultHome> {
       children: [
         Padding(
           padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
+          child: Card(
+            child: Padding(
+              padding: const EdgeInsets.all(12),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: FilledButton.icon(
+                      key: const Key('vault-import'),
+                      onPressed: _import,
+                      icon: const Icon(Icons.add),
+                      label: const Text('Import'),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: OutlinedButton.icon(
+                      key: const Key('vault-camera'),
+                      onPressed: _capture,
+                      icon: const Icon(Icons.camera_alt_outlined),
+                      label: const Text('Camera'),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: OutlinedButton.icon(
+                      key: const Key('vault-new-note'),
+                      onPressed: _newNote,
+                      icon: const Icon(Icons.note_add_outlined),
+                      label: const Text('Note'),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(20, 8, 20, 4),
           child: Row(
             children: [
               Expanded(
-                child: FilledButton.icon(
-                  key: const Key('vault-import'),
-                  onPressed: _import,
-                  icon: const Icon(Icons.add),
-                  label: const Text('Import'),
+                child: Text(
+                  'Protected items',
+                  style: Theme.of(context).textTheme.titleMedium,
                 ),
               ),
-              const SizedBox(width: 10),
-              Expanded(
-                child: OutlinedButton.icon(
-                  key: const Key('vault-camera'),
-                  onPressed: _capture,
-                  icon: const Icon(Icons.camera_alt_outlined),
-                  label: const Text('Camera'),
-                ),
-              ),
-              const SizedBox(width: 10),
-              Expanded(
-                child: OutlinedButton.icon(
-                  key: const Key('vault-new-note'),
-                  onPressed: _newNote,
-                  icon: const Icon(Icons.note_add_outlined),
-                  label: const Text('Note'),
-                ),
+              Text(
+                '${_items.length} items',
+                style: Theme.of(context).textTheme.bodySmall,
               ),
             ],
           ),
         ),
-        if (_error != null)
-          Padding(
-            padding: const EdgeInsets.all(16),
-            child: Text(_error!, textAlign: TextAlign.center),
-          ),
         Expanded(
-          child: _items.isEmpty
-              ? const Center(
-                  child: Padding(
-                    padding: EdgeInsets.all(32),
-                    child: Text(
-                      'No protected items yet. Import or capture content to store it locally.',
-                      textAlign: TextAlign.center,
+          child: AnimatedSwitcher(
+            duration: PrivateVaultTheme.motionDuration(context),
+            child: _error != null
+                ? Center(
+                    key: const ValueKey('vault-error'),
+                    child: Padding(
+                      padding: const EdgeInsets.all(32),
+                      child: Text(_error!, textAlign: TextAlign.center),
+                    ),
+                  )
+                : _items.isEmpty
+                ? const Center(
+                    key: ValueKey('vault-empty'),
+                    child: Padding(
+                      padding: EdgeInsets.all(32),
+                      child: Text(
+                        'No protected items yet. Import, capture, or create a note.',
+                        textAlign: TextAlign.center,
+                      ),
+                    ),
+                  )
+                : Semantics(
+                    key: const ValueKey('vault-list'),
+                    label: 'Protected item list',
+                    container: true,
+                    child: ListView.separated(
+                      padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
+                      itemCount: _items.length,
+                      separatorBuilder: (_, _) => const SizedBox(height: 8),
+                      itemBuilder: (context, index) {
+                        final item = _items[index];
+                        return Card(
+                          child: ListTile(
+                            onTap: () => _open(item),
+                            leading: Icon(_iconFor(item.kind)),
+                            title: Text(_labelFor(item.kind)),
+                            subtitle: item.kind == VaultItemKind.unknown
+                                ? const Text(
+                                    'Open once to restore authenticated metadata',
+                                  )
+                                : Text(_shortTimestamp(item.createdAt)),
+                            trailing: const Icon(Icons.chevron_right),
+                          ),
+                        );
+                      },
                     ),
                   ),
-                )
-              : ListView.separated(
-                  padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
-                  itemCount: _items.length,
-                  separatorBuilder: (_, _) => const Divider(height: 1),
-                  itemBuilder: (context, index) {
-                    final item = _items[index];
-                    return ListTile(
-                      onTap: () => _open(item),
-                      leading: Icon(_iconFor(item.kind)),
-                      title: Text(_labelFor(item.kind)),
-                      subtitle: Text(_shortTimestamp(item.createdAt)),
-                      trailing: const Icon(Icons.chevron_right),
-                    );
-                  },
-                ),
+          ),
         ),
       ],
     );
   }
 
   IconData _iconFor(VaultItemKind kind) => switch (kind) {
+    VaultItemKind.unknown => Icons.lock_outline,
     VaultItemKind.note => Icons.note_outlined,
     VaultItemKind.image => Icons.image_outlined,
     VaultItemKind.video => Icons.video_file_outlined,
@@ -297,6 +342,7 @@ class _VaultHomeState extends State<VaultHome> {
   };
 
   String _labelFor(VaultItemKind kind) => switch (kind) {
+    VaultItemKind.unknown => 'Protected legacy item',
     VaultItemKind.note => 'Protected note',
     VaultItemKind.image => 'Protected image',
     VaultItemKind.video => 'Protected video',

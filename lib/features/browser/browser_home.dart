@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:private_vault_mobile/app/private_vault_theme.dart';
 import 'package:private_vault_mobile/features/browser/browser_download_service.dart';
 import 'package:private_vault_mobile/features/browser/browser_profiles.dart';
 import 'package:private_vault_mobile/features/vault/vault_repository.dart';
@@ -24,6 +25,8 @@ class _BrowserHomeState extends State<BrowserHome> {
   final _address = TextEditingController();
   String? _message;
   bool _loading = false;
+  bool _showingStartPage = true;
+  Brightness? _startPageBrightness;
 
   @override
   void initState() {
@@ -55,8 +58,7 @@ class _BrowserHomeState extends State<BrowserHome> {
             });
           },
         ),
-      )
-      ..loadHtmlString(_startPage);
+      );
 
     _profiles = EphemeralBrowserProfiles(
       clearCookies: _cookieManager.clearCookies,
@@ -72,6 +74,16 @@ class _BrowserHomeState extends State<BrowserHome> {
             repository: widget.repository!,
             fetch: BrowserDownloadService.fetchDirectHttps,
           );
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final brightness = Theme.of(context).brightness;
+    if (_showingStartPage && _startPageBrightness != brightness) {
+      _startPageBrightness = brightness;
+      unawaited(_controller.loadHtmlString(_startPageFor(brightness)));
+    }
   }
 
   @override
@@ -94,6 +106,7 @@ class _BrowserHomeState extends State<BrowserHome> {
       return;
     }
     setState(() => _message = null);
+    _showingStartPage = false;
     await _controller.loadRequest(uri);
   }
 
@@ -101,7 +114,11 @@ class _BrowserHomeState extends State<BrowserHome> {
     setState(() => _loading = true);
     try {
       await _profiles.switchTo(id);
-      await _controller.loadHtmlString(_startPage);
+      if (!mounted) return;
+      final brightness = Theme.of(context).brightness;
+      _showingStartPage = true;
+      _startPageBrightness = brightness;
+      await _controller.loadHtmlString(_startPageFor(brightness));
       _address.clear();
       if (!mounted) return;
       setState(() {
@@ -171,91 +188,121 @@ class _BrowserHomeState extends State<BrowserHome> {
 
     return Column(
       children: [
-        Material(
-          color: Theme.of(context).colorScheme.surfaceContainer,
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
-            child: Column(
-              children: [
-                Row(
-                  children: [
-                    DropdownButton<String>(
-                      value: active.id,
-                      items: [
-                        for (final profile in items)
-                          DropdownMenuItem(
-                            value: profile.id,
-                            child: Text(profile.label),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(12, 12, 12, 8),
+          child: Card(
+            child: Padding(
+              padding: const EdgeInsets.all(12),
+              child: Column(
+                children: [
+                  Row(
+                    children: [
+                      Expanded(
+                        child: Semantics(
+                          label: 'Browser profile',
+                          child: DropdownButtonHideUnderline(
+                            child: DropdownButton<String>(
+                              value: active.id,
+                              isExpanded: true,
+                              items: [
+                                for (final profile in items)
+                                  DropdownMenuItem(
+                                    value: profile.id,
+                                    child: Text(profile.label),
+                                  ),
+                              ],
+                              onChanged: (id) {
+                                if (id != null) {
+                                  unawaited(_switchProfile(id));
+                                }
+                              },
+                            ),
                           ),
-                      ],
-                      onChanged: (id) {
-                        if (id != null) unawaited(_switchProfile(id));
-                      },
-                    ),
-                    IconButton(
-                      tooltip: 'New ephemeral profile',
-                      onPressed: () {
-                        final profile = _profiles.addProfile();
-                        setState(() {});
-                        unawaited(_switchProfile(profile.id));
-                      },
-                      icon: const Icon(Icons.person_add_alt_1_outlined),
-                    ),
-                    const Spacer(),
-                    IconButton(
-                      tooltip: 'Download current HTTPS response to vault',
-                      onPressed: _loading ? null : _downloadCurrentAddress,
-                      icon: const Icon(Icons.download_outlined),
-                    ),
-                  ],
-                ),
-                Row(
-                  children: [
-                    Expanded(
-                      child: TextField(
-                        key: const Key('browser-address'),
-                        controller: _address,
-                        keyboardType: TextInputType.url,
-                        autocorrect: false,
-                        enableSuggestions: false,
-                        textInputAction: TextInputAction.go,
-                        onSubmitted: (_) => _navigate(),
-                        decoration: const InputDecoration(
-                          hintText: 'https://example.com',
-                          isDense: true,
-                          border: OutlineInputBorder(),
                         ),
                       ),
-                    ),
-                    const SizedBox(width: 8),
-                    IconButton.filled(
-                      tooltip: 'Go',
-                      onPressed: _loading ? null : _navigate,
-                      icon: const Icon(Icons.arrow_forward),
-                    ),
-                  ],
-                ),
-                if (_message != null) ...[
+                      Semantics(
+                        button: true,
+                        label: 'New ephemeral profile',
+                        child: IconButton(
+                          tooltip: 'New ephemeral profile',
+                          onPressed: () {
+                            final profile = _profiles.addProfile();
+                            setState(() {});
+                            unawaited(_switchProfile(profile.id));
+                          },
+                          icon: const Icon(Icons.person_add_alt_1_outlined),
+                        ),
+                      ),
+                      Semantics(
+                        button: true,
+                        label: 'Download current HTTPS response to vault',
+                        child: IconButton(
+                          tooltip: 'Download current HTTPS response to vault',
+                          onPressed: _loading ? null : _downloadCurrentAddress,
+                          icon: const Icon(Icons.download_outlined),
+                        ),
+                      ),
+                    ],
+                  ),
                   const SizedBox(height: 8),
-                  Align(
-                    alignment: Alignment.centerLeft,
-                    child: Text(
-                      _message!,
-                      style: Theme.of(context).textTheme.bodySmall,
-                    ),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: TextField(
+                          key: const Key('browser-address'),
+                          controller: _address,
+                          keyboardType: TextInputType.url,
+                          autocorrect: false,
+                          enableSuggestions: false,
+                          textInputAction: TextInputAction.go,
+                          onSubmitted: (_) => _navigate(),
+                          decoration: const InputDecoration(
+                            labelText: 'Web address',
+                            hintText: 'https://example.com',
+                            isDense: true,
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      Semantics(
+                        button: true,
+                        label: 'Go',
+                        child: IconButton.filled(
+                          tooltip: 'Go',
+                          onPressed: _loading ? null : _navigate,
+                          icon: const Icon(Icons.arrow_forward),
+                        ),
+                      ),
+                    ],
+                  ),
+                  AnimatedSwitcher(
+                    duration: PrivateVaultTheme.motionDuration(context),
+                    child: _message == null
+                        ? const SizedBox(key: ValueKey('browser-status-empty'))
+                        : Padding(
+                            key: ValueKey(_message),
+                            padding: const EdgeInsets.only(top: 10),
+                            child: Align(
+                              alignment: Alignment.centerLeft,
+                              child: Text(
+                                _message!,
+                                style: Theme.of(context).textTheme.bodySmall,
+                              ),
+                            ),
+                          ),
                   ),
                 ],
-              ],
+              ),
             ),
           ),
         ),
         if (_loading) const LinearProgressIndicator(minHeight: 2),
         Expanded(child: WebViewWidget(controller: _controller)),
         const Padding(
-          padding: EdgeInsets.fromLTRB(12, 6, 12, 10),
+          padding: EdgeInsets.fromLTRB(16, 8, 16, 12),
           child: Text(
-            'Ephemeral profiles are sequential: switching clears the shared platform WebView store. '
-            'They are not simultaneous retained identities and do not provide anonymity.',
+            'Profiles are sequential and clear the shared WebView store when switched. '
+            'They are not simultaneous retained identities or an anonymity feature.',
             textAlign: TextAlign.center,
             style: TextStyle(fontSize: 11),
           ),
@@ -264,15 +311,20 @@ class _BrowserHomeState extends State<BrowserHome> {
     );
   }
 
-  static const _startPage = '''
+  static String _startPageFor(Brightness brightness) {
+    final dark = brightness == Brightness.dark;
+    final background = dark ? '#101718' : '#f4f7f6';
+    final foreground = dark ? '#e1e3e3' : '#1a1c1c';
+    final secondary = dark ? '#bfc9c7' : '#414948';
+    return '''
 <!doctype html>
 <html>
 <head>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <style>
-body { font-family: -apple-system, BlinkMacSystemFont, sans-serif; margin: 2.5rem; color: #d8dde8; background:#111722; }
+body { font-family: -apple-system, BlinkMacSystemFont, sans-serif; margin: 2.5rem; color:$foreground; background:$background; }
 h2 { font-weight: 600; }
-p { line-height: 1.45; color:#aeb8c9; }
+p { line-height: 1.45; color:$secondary; }
 </style>
 </head>
 <body>
@@ -281,4 +333,5 @@ p { line-height: 1.45; color:#aeb8c9; }
 </body>
 </html>
 ''';
+  }
 }

@@ -42,6 +42,7 @@ class BoundaryVaultRepository implements VaultRepository {
 
   final items = <VaultItem>[];
   final bytesById = <String, Uint8List>{};
+  int listCalls = 0;
 
   @override
   Future<VaultItem> addBytes(
@@ -65,7 +66,10 @@ class BoundaryVaultRepository implements VaultRepository {
   }
 
   @override
-  Future<List<VaultItem>> list() async => List.unmodifiable(items);
+  Future<List<VaultItem>> list() async {
+    listCalls += 1;
+    return List.unmodifiable(items);
+  }
 
   @override
   Future<Uint8List> readBytes(String id) async => bytesById[id]!;
@@ -78,6 +82,20 @@ MediaVaultService boundaryMedia(BoundaryVaultRepository repository) {
     capturePhoto: () async => null,
     saveExport: (_, _) async => true,
   );
+}
+
+class CountingSettingsStorage implements SettingsStorage {
+  int writes = 0;
+  String? encoded;
+
+  @override
+  Future<String?> read() async => encoded;
+
+  @override
+  Future<void> write(String value) async {
+    writes += 1;
+    encoded = value;
+  }
 }
 
 class FakeUnlockService implements UnlockService {
@@ -362,6 +380,81 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.byTooltip('Lock now'), findsOneWidget);
+  });
+
+  testWidgets('visited Vault state survives tab switches', (tester) async {
+    final lock = LockController();
+    final repository = BoundaryVaultRepository();
+    await tester.pumpWidget(
+      PrivateVaultApp(
+        lockController: lock,
+        unlockService: FakeUnlockService(),
+        vaultRepository: repository,
+        mediaService: boundaryMedia(repository),
+      ),
+    );
+
+    lock.unlock();
+    await tester.pumpAndSettle();
+    expect(repository.listCalls, 1);
+
+    await tester.tap(find.text('Settings').last);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Vault').last);
+    await tester.pumpAndSettle();
+
+    expect(repository.listCalls, 1);
+  });
+
+  testWidgets('visited Settings state survives tab switches', (tester) async {
+    final lock = LockController();
+    await tester.pumpWidget(
+      PrivateVaultApp(lockController: lock, unlockService: FakeUnlockService()),
+    );
+
+    lock.unlock();
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Settings').last);
+    await tester.pumpAndSettle();
+    final settingsElement = tester.element(
+      find.byKey(const ValueKey('settings-home')),
+    );
+
+    await tester.tap(find.text('Vault').last);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Settings').last);
+    await tester.pumpAndSettle();
+
+    expect(
+      identical(
+        settingsElement,
+        tester.element(find.byKey(const ValueKey('settings-home'))),
+      ),
+      isTrue,
+    );
+  });
+
+  testWidgets('settings slider persists once when drag ends', (tester) async {
+    final lock = LockController();
+    final storage = CountingSettingsStorage();
+    await tester.pumpWidget(
+      PrivateVaultApp(
+        lockController: lock,
+        unlockService: FakeUnlockService(),
+        settingsStore: AppSettingsStore(storage),
+      ),
+    );
+
+    lock.unlock();
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Settings').last);
+    await tester.pumpAndSettle();
+
+    final slider = find.byType(Slider).first;
+    await tester.drag(slider, const Offset(120, 0));
+    await tester.pumpAndSettle();
+
+    expect(storage.writes, 1);
   });
 
   testWidgets(

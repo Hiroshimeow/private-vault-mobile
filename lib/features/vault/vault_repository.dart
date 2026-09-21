@@ -7,7 +7,7 @@ import 'package:cryptography/cryptography.dart';
 import 'package:private_vault_mobile/core/crypto/vault_crypto.dart';
 import 'package:private_vault_mobile/core/storage/secret_store.dart';
 
-enum VaultItemKind { note, image, video, document }
+enum VaultItemKind { unknown, note, image, video, document }
 
 class VaultItem {
   const VaultItem({
@@ -90,6 +90,9 @@ class LocalVaultRepository implements VaultRepository {
     Uint8List bytes, {
     required VaultItemKind kind,
   }) async {
+    if (kind == VaultItemKind.unknown) {
+      throw ArgumentError.value(kind, 'kind', 'unknown cannot be persisted');
+    }
     final root = await _ensureRoot();
     final key = await _keyStore.getOrCreate();
     final createdAt = DateTime.now().toUtc();
@@ -101,17 +104,12 @@ class LocalVaultRepository implements VaultRepository {
         'payload': base64Encode(bytes),
       }),
     );
-    final sealed = await _crypto.encrypt(
+    await _writeEncrypted(
+      File(_path(root, id)),
       Uint8List.fromList(clearEnvelope),
       key,
     );
-    final diskEnvelope = jsonEncode({
-      'v': 1,
-      'nonce': base64UrlEncode(sealed.nonce),
-      'mac': base64UrlEncode(sealed.mac),
-      'cipherText': base64Encode(sealed.cipherText),
-    });
-    await File(_path(root, id)).writeAsString(diskEnvelope, flush: true);
+    await _writeMetadata(root, id, kind, createdAt, key);
     return VaultItem(id: id, kind: kind, createdAt: createdAt);
   }
 
@@ -122,11 +120,20 @@ class LocalVaultRepository implements VaultRepository {
     final decoded = await _readDecoded(File(_path(root, id)), key);
     final payload = decoded['payload'];
     if (payload is! String) throw const VaultFormatException();
+
+    final metadata = _metadataFromDecoded(decoded);
+    late final Uint8List bytes;
     try {
-      return Uint8List.fromList(base64Decode(payload));
+      bytes = Uint8List.fromList(base64Decode(payload));
     } on FormatException {
       throw const VaultFormatException();
     }
+
+    final metadataFile = File(_metadataPath(root, id));
+    if (!await metadataFile.exists()) {
+      await _writeMetadata(root, id, metadata.kind, metadata.createdAt, key);
+    }
+    return bytes;
   }
 
   @override
@@ -142,21 +149,23 @@ class LocalVaultRepository implements VaultRepository {
     final key = await _requiredKey();
     final items = <VaultItem>[];
     for (final file in files) {
-      final decoded = await _readDecoded(file, key);
-      final kindName = decoded['kind'];
-      final createdAtRaw = decoded['createdAt'];
-      if (kindName is! String || createdAtRaw is! String) {
-        throw const VaultFormatException();
+      final id = _idFromPath(file.path);
+      final metadataFile = File(_metadataPath(root, id));
+      if (!await metadataFile.exists()) {
+        items.add(
+          VaultItem(
+            id: id,
+            kind: VaultItemKind.unknown,
+            createdAt: DateTime.fromMillisecondsSinceEpoch(0, isUtc: true),
+          ),
+        );
+        continue;
       }
-      final kind = VaultItemKind.values
-          .where((value) => value.name == kindName)
-          .firstOrNull;
-      final createdAt = DateTime.tryParse(createdAtRaw);
-      if (kind == null || createdAt == null) {
-        throw const VaultFormatException();
-      }
+
+      final decoded = await _readDecoded(metadataFile, key);
+      final metadata = _metadataFromDecoded(decoded);
       items.add(
-        VaultItem(id: _idFromPath(file.path), kind: kind, createdAt: createdAt),
+        VaultItem(id: id, kind: metadata.kind, createdAt: metadata.createdAt),
       );
     }
     items.sort((a, b) => b.createdAt.compareTo(a.createdAt));
@@ -166,10 +175,62 @@ class LocalVaultRepository implements VaultRepository {
   @override
   Future<void> delete(String id) async {
     final root = await _ensureRoot();
-    final file = File(_path(root, id));
-    if (await file.exists()) {
-      await file.delete();
+    for (final file in [File(_path(root, id)), File(_metadataPath(root, id))]) {
+      if (await file.exists()) {
+        await file.delete();
+      }
     }
+  }
+
+  Future<void> _writeMetadata(
+    Directory root,
+    String id,
+    VaultItemKind kind,
+    DateTime createdAt,
+    SecretKey key,
+  ) async {
+    final clear = Uint8List.fromList(
+      utf8.encode(
+        jsonEncode({
+          'kind': kind.name,
+          'createdAt': createdAt.toIso8601String(),
+        }),
+      ),
+    );
+    await _writeEncrypted(File(_metadataPath(root, id)), clear, key);
+  }
+
+  Future<void> _writeEncrypted(
+    File file,
+    Uint8List clear,
+    SecretKey key,
+  ) async {
+    final sealed = await _crypto.encrypt(clear, key);
+    final diskEnvelope = jsonEncode({
+      'v': 1,
+      'nonce': base64UrlEncode(sealed.nonce),
+      'mac': base64UrlEncode(sealed.mac),
+      'cipherText': base64Encode(sealed.cipherText),
+    });
+    await file.writeAsString(diskEnvelope, flush: true);
+  }
+
+  _VaultMetadata _metadataFromDecoded(Map<String, Object?> decoded) {
+    final kindName = decoded['kind'];
+    final createdAtRaw = decoded['createdAt'];
+    if (kindName is! String || createdAtRaw is! String) {
+      throw const VaultFormatException();
+    }
+    final kind = VaultItemKind.values
+        .where(
+          (value) => value != VaultItemKind.unknown && value.name == kindName,
+        )
+        .firstOrNull;
+    final createdAt = DateTime.tryParse(createdAtRaw);
+    if (kind == null || createdAt == null) {
+      throw const VaultFormatException();
+    }
+    return _VaultMetadata(kind, createdAt);
   }
 
   Future<Map<String, Object?>> _readDecoded(File file, SecretKey key) async {
@@ -217,6 +278,9 @@ class LocalVaultRepository implements VaultRepository {
   String _path(Directory root, String id) =>
       '${root.path}${Platform.pathSeparator}$id.vault';
 
+  String _metadataPath(Directory root, String id) =>
+      '${root.path}${Platform.pathSeparator}$id.meta';
+
   String _idFromPath(String path) {
     final name = path.split(Platform.pathSeparator).last;
     return name.substring(0, name.length - '.vault'.length);
@@ -230,6 +294,13 @@ class LocalVaultRepository implements VaultRepository {
     ).map((value) => value.toRadixString(16).padLeft(2, '0')).join();
     return '${DateTime.now().microsecondsSinceEpoch.toRadixString(16)}-$suffix';
   }
+}
+
+class _VaultMetadata {
+  const _VaultMetadata(this.kind, this.createdAt);
+
+  final VaultItemKind kind;
+  final DateTime createdAt;
 }
 
 extension _FirstOrNull<T> on Iterable<T> {
