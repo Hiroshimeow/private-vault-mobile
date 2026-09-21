@@ -6,6 +6,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:private_vault_mobile/app/private_vault_app.dart';
 import 'package:private_vault_mobile/core/crypto/vault_crypto.dart';
 import 'package:private_vault_mobile/core/storage/secret_store.dart';
+import 'package:private_vault_mobile/features/apps/work_profile_client.dart';
 import 'package:private_vault_mobile/features/auth/biometric_unlock.dart';
 import 'package:private_vault_mobile/features/auth/lock_controller.dart';
 import 'package:private_vault_mobile/features/auth/secure_unlock_service.dart';
@@ -52,6 +53,9 @@ Future<void> main() async {
       settingsStore: settingsStore,
       panicService: panic,
       disguiseBridge: PlatformDisguiseBridge(),
+      workProfileClient: Platform.isAndroid
+          ? PigeonWorkProfileClient()
+          : const UnavailableWorkProfileClient(),
       initialSettings: settings,
     ),
   );

@@ -4,6 +4,8 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:private_vault_mobile/features/apps/work_profile_client.dart';
+import 'package:private_vault_mobile/features/apps/work_profile_home.dart';
 import 'package:private_vault_mobile/features/auth/biometric_unlock.dart';
 import 'package:private_vault_mobile/features/auth/lock_controller.dart';
 import 'package:private_vault_mobile/features/auth/secure_unlock_service.dart';
@@ -30,6 +32,7 @@ class PrivateVaultApp extends StatefulWidget {
     this.settingsStore,
     this.panicService,
     this.disguiseBridge,
+    this.workProfileClient,
     this.initialSettings = const AppSettings.defaults(),
     this.initialCover,
   });
@@ -42,6 +45,7 @@ class PrivateVaultApp extends StatefulWidget {
   final AppSettingsStore? settingsStore;
   final PanicSensorService? panicService;
   final PlatformDisguiseBridge? disguiseBridge;
+  final WorkProfileClient? workProfileClient;
   final AppSettings initialSettings;
   final CoverKind? initialCover;
 
@@ -255,6 +259,7 @@ class _PrivateVaultAppState extends State<PrivateVaultApp>
             mediaService: widget.mediaService,
             settings: _settings,
             disguiseBridge: widget.disguiseBridge,
+            workProfileClient: widget.workProfileClient,
             onSettingsChanged: (next) {
               unawaited(_applySettings(next));
             },
@@ -318,6 +323,7 @@ class SecretWorkspace extends StatefulWidget {
     required this.settings,
     required this.onSettingsChanged,
     this.disguiseBridge,
+    this.workProfileClient,
     this.vaultRepository,
     this.mediaService,
   });
@@ -326,6 +332,7 @@ class SecretWorkspace extends StatefulWidget {
   final AppSettings settings;
   final ValueChanged<AppSettings> onSettingsChanged;
   final PlatformDisguiseBridge? disguiseBridge;
+  final WorkProfileClient? workProfileClient;
   final VaultRepository? vaultRepository;
   final MediaVaultService? mediaService;
 
@@ -338,7 +345,10 @@ class _SecretWorkspaceState extends State<SecretWorkspace> {
 
   @override
   Widget build(BuildContext context) {
-    const labels = ['Vault', 'Browser', 'Settings'];
+    final hasApps = widget.workProfileClient != null;
+    final labels = hasApps
+        ? const ['Vault', 'Apps', 'Browser', 'Settings']
+        : const ['Vault', 'Browser', 'Settings'];
 
     return Theme(
       data: ThemeData(
@@ -360,8 +370,8 @@ class _SecretWorkspaceState extends State<SecretWorkspace> {
             ),
           ],
         ),
-        body: switch (_index) {
-          0 =>
+        body: switch ((_index, hasApps)) {
+          (0, _) =>
             widget.vaultRepository != null && widget.mediaService != null
                 ? VaultHome(
                     repository: widget.vaultRepository!,
@@ -369,7 +379,8 @@ class _SecretWorkspaceState extends State<SecretWorkspace> {
                     confirmExport: widget.settings.confirmExport,
                   )
                 : const _VaultUnavailable(),
-          1 => BrowserHome(
+          (1, true) => WorkProfileHome(client: widget.workProfileClient!),
+          (1, false) || (2, true) => BrowserHome(
             repository: widget.vaultRepository,
             clearOnClose: widget.settings.browserClearOnClose,
           ),
@@ -382,18 +393,24 @@ class _SecretWorkspaceState extends State<SecretWorkspace> {
         bottomNavigationBar: NavigationBar(
           selectedIndex: _index,
           onDestinationSelected: (index) => setState(() => _index = index),
-          destinations: const [
-            NavigationDestination(
+          destinations: [
+            const NavigationDestination(
               icon: Icon(Icons.inventory_2_outlined),
               selectedIcon: Icon(Icons.inventory_2),
               label: 'Vault',
             ),
-            NavigationDestination(
+            if (hasApps)
+              const NavigationDestination(
+                icon: Icon(Icons.apps_outlined),
+                selectedIcon: Icon(Icons.apps),
+                label: 'Apps',
+              ),
+            const NavigationDestination(
               icon: Icon(Icons.language_outlined),
               selectedIcon: Icon(Icons.language),
               label: 'Browser',
             ),
-            NavigationDestination(
+            const NavigationDestination(
               icon: Icon(Icons.tune_outlined),
               selectedIcon: Icon(Icons.tune),
               label: 'Settings',

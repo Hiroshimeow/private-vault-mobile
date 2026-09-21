@@ -44,8 +44,8 @@ jobs:
       - name: Test
         run: flutter test --coverage
 
-      - name: Security contract tests
-        run: flutter test test/unit/logging_contract_test.dart test/unit/platform_privacy_contract_test.dart
+      - name: Security and Work Profile contract tests
+        run: flutter test test/unit/logging_contract_test.dart test/unit/platform_privacy_contract_test.dart test/unit/work_profile_android_contract_test.dart test/unit/work_profile_native_contract_test.dart test/unit/work_profile_models_test.dart test/widget/work_profile_navigation_test.dart test/widget/work_profile_home_test.dart
 
   android:
     name: Android debug + release smoke
@@ -70,6 +70,10 @@ jobs:
 
       - name: Resolve dependencies
         run: flutter pub get
+
+      - name: Native Android unit tests
+        working-directory: android
+        run: ./gradlew app:testDebugUnitTest
 
       - name: Build debug APK
         run: flutter build apk --debug
