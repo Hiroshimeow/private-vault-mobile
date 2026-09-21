@@ -75,7 +75,9 @@ void main() {
     );
   });
 
-  testWidgets('unlock sheet has explicit access hierarchy', (tester) async {
+  testWidgets('calculator title exposes no PIN management surface', (
+    tester,
+  ) async {
     await tester.pumpWidget(
       PrivateVaultApp(
         lockController: LockController(),
@@ -86,12 +88,9 @@ void main() {
     await tester.longPress(find.byKey(const Key('cover-title')));
     await tester.pumpAndSettle();
 
-    expect(find.bySemanticsLabel('Enter PIN'), findsOneWidget);
-    expect(
-      find.text('Unlock protected content with your access PIN.'),
-      findsOneWidget,
-    );
-    expect(find.widgetWithText(FilledButton, 'Unlock'), findsOneWidget);
+    expect(find.bySemanticsLabel('Enter PIN'), findsNothing);
+    expect(find.textContaining('access PIN'), findsNothing);
+    expect(find.widgetWithText(FilledButton, 'Unlock'), findsNothing);
   });
 
   for (final darkMode in <bool>[false, true]) {

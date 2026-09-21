@@ -33,6 +33,9 @@ class _Biometric implements BiometricUnlock {
 
   @override
   Future<bool> isAvailable() async => true;
+
+  @override
+  Future<void> cancel() async {}
 }
 
 class _Keys implements VaultKeyStore {
@@ -68,19 +71,26 @@ void main() {
     expect(find.text('Calculator'), findsOneWidget);
     expect(find.text('Vault'), findsNothing);
 
+    Future<void> holdEquals() async {
+      final equals = find.byKey(const Key('calculator-key-='));
+      final gesture = await tester.startGesture(tester.getCenter(equals));
+      await tester.pump(const Duration(seconds: 2));
+      await tester.pumpAndSettle();
+      await gesture.up();
+      await tester.pumpAndSettle();
+    }
+
     for (final digit in ['0', '0', '0', '1']) {
       await tester.tap(find.byKey(Key('calculator-key-$digit')));
     }
-    await tester.pump(const Duration(milliseconds: 300));
-    await tester.pumpAndSettle();
+    await holdEquals();
     expect(find.text('Calculator'), findsOneWidget);
     expect(find.text('Vault'), findsNothing);
 
     for (var index = 0; index < 4; index++) {
       await tester.tap(find.byKey(const Key('calculator-key-0')));
     }
-    await tester.pump(const Duration(milliseconds: 300));
-    await tester.pumpAndSettle();
+    await holdEquals();
     expect(find.byTooltip('Lock now'), findsOneWidget);
 
     tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.paused);
@@ -93,8 +103,7 @@ void main() {
     for (var index = 0; index < 4; index++) {
       await tester.tap(find.byKey(const Key('calculator-key-0')));
     }
-    await tester.pump(const Duration(milliseconds: 300));
-    await tester.pumpAndSettle();
+    await holdEquals();
     expect(find.byTooltip('Lock now'), findsOneWidget);
 
     lock.panic();

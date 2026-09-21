@@ -17,6 +17,7 @@ class FakeBiometricUnlock implements BiometricUnlock {
   final bool available;
   final bool accepted;
   int authenticateCalls = 0;
+  int cancelCalls = 0;
 
   @override
   Future<bool> authenticate() async {
@@ -26,6 +27,11 @@ class FakeBiometricUnlock implements BiometricUnlock {
 
   @override
   Future<bool> isAvailable() async => available;
+
+  @override
+  Future<void> cancel() async {
+    cancelCalls += 1;
+  }
 }
 
 class BoundaryVaultRepository implements VaultRepository {
@@ -152,7 +158,7 @@ Future<void> pumpCalculatorCover(
         size: size,
         textScaler: TextScaler.linear(textScale),
       ),
-      child: MaterialApp(home: CalculatorCover(onUnlockRequested: () {})),
+      child: MaterialApp(home: CalculatorCover()),
     ),
   );
   await tester.pump();
@@ -369,12 +375,15 @@ void main() {
     await tester.pumpWidget(
       PrivateVaultApp(lockController: lock, unlockService: FakeUnlockService()),
     );
-
-    await tester.longPress(find.byKey(const Key('cover-title')));
     await tester.pumpAndSettle();
 
-    await tester.enterText(find.byKey(const Key('unlock-pin')), '482951');
-    await tester.tap(find.widgetWithText(FilledButton, 'Unlock'));
+    for (final digit in '482951'.split('')) {
+      await tester.tap(find.byKey(Key('calculator-key-$digit')));
+    }
+    final trigger = find.byKey(const Key('calculator-key-8'));
+    final gesture = await tester.startGesture(tester.getCenter(trigger));
+    await tester.pump(const Duration(seconds: 2));
+    await gesture.up();
     await tester.pumpAndSettle();
 
     expect(find.byTooltip('Lock now'), findsOneWidget);
@@ -404,7 +413,11 @@ void main() {
     for (var index = 0; index < 4; index++) {
       await tester.tap(find.byKey(const Key('calculator-key-0')));
     }
-    await tester.pump(const Duration(milliseconds: 250));
+    final equals = find.byKey(const Key('calculator-key-='));
+    final gesture = await tester.startGesture(tester.getCenter(equals));
+    await tester.pump(const Duration(seconds: 2));
+    await tester.pumpAndSettle();
+    await gesture.up();
     await tester.pumpAndSettle();
 
     expect(biometric.authenticateCalls, 1);
@@ -431,7 +444,11 @@ void main() {
     for (final digit in ['0', '0', '0', '1']) {
       await tester.tap(find.byKey(Key('calculator-key-$digit')));
     }
-    await tester.pump(const Duration(milliseconds: 250));
+    final equals = find.byKey(const Key('calculator-key-='));
+    final gesture = await tester.startGesture(tester.getCenter(equals));
+    await tester.pump(const Duration(seconds: 2));
+    await tester.pumpAndSettle();
+    await gesture.up();
     await tester.pumpAndSettle();
 
     expect(biometric.authenticateCalls, 0);
@@ -458,7 +475,11 @@ void main() {
     for (var index = 0; index < 4; index++) {
       await tester.tap(find.byKey(const Key('calculator-key-0')));
     }
-    await tester.pump(const Duration(milliseconds: 250));
+    final equals = find.byKey(const Key('calculator-key-='));
+    final gesture = await tester.startGesture(tester.getCenter(equals));
+    await tester.pump(const Duration(seconds: 2));
+    await tester.pumpAndSettle();
+    await gesture.up();
     await tester.pumpAndSettle();
 
     expect(biometric.authenticateCalls, 1);
@@ -479,11 +500,14 @@ void main() {
       ),
     );
 
-    await tester.longPress(find.byKey(const Key('cover-title')));
+    for (var index = 0; index < 4; index++) {
+      await tester.tap(find.byKey(const Key('calculator-key-0')));
+    }
+    final equals = find.byKey(const Key('calculator-key-='));
+    final gesture = await tester.startGesture(tester.getCenter(equals));
+    await tester.pump(const Duration(seconds: 2));
     await tester.pumpAndSettle();
-    expect(find.text('Use biometrics'), findsNothing);
-    await tester.enterText(find.byKey(const Key('unlock-pin')), '0000');
-    await tester.tap(find.widgetWithText(FilledButton, 'Unlock'));
+    await gesture.up();
     await tester.pumpAndSettle();
 
     expect(biometric.authenticateCalls, 1);

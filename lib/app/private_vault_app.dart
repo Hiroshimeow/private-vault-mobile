@@ -12,6 +12,7 @@ import 'package:private_vault_mobile/features/apps/work_profile_home.dart';
 import 'package:private_vault_mobile/features/auth/biometric_unlock.dart';
 import 'package:private_vault_mobile/features/auth/lock_controller.dart';
 import 'package:private_vault_mobile/features/auth/secure_unlock_service.dart';
+import 'package:private_vault_mobile/features/auth/unlock_gate/calculator_unlock_gate.dart';
 import 'package:private_vault_mobile/features/browser/browser_home.dart';
 import 'package:private_vault_mobile/features/cover/calculator_cover.dart';
 import 'package:private_vault_mobile/features/cover/notes_cover.dart';
@@ -67,9 +68,10 @@ class _PrivateVaultAppState extends State<PrivateVaultApp>
   late final VoidCallback _confidentialityBoundary;
   late AppSettings _settings;
   late CoverKind _cover;
-  Timer? _hiddenUnlockDebounce;
   Future<int?>? _pinLengthFuture;
+  int _calculatorPinLength = 4;
   bool _hiddenUnlockInFlight = false;
+  bool _systemHandoffActive = false;
 
   @override
   void initState() {
@@ -85,6 +87,7 @@ class _PrivateVaultAppState extends State<PrivateVaultApp>
             ? CoverKind.notes
             : CoverKind.calculator);
     WidgetsBinding.instance.addObserver(this);
+    unawaited(_refreshCalculatorPinLength());
   }
 
   @override
@@ -100,6 +103,7 @@ class _PrivateVaultAppState extends State<PrivateVaultApp>
     }
     if (!identical(oldWidget.unlockService, widget.unlockService)) {
       _pinLengthFuture = null;
+      unawaited(_refreshCalculatorPinLength());
     }
   }
 
@@ -118,6 +122,7 @@ class _PrivateVaultAppState extends State<PrivateVaultApp>
       widget.lockController.onForeground();
       return;
     }
+    if (_systemHandoffActive) return;
     if (state == AppLifecycleState.inactive ||
         state == AppLifecycleState.paused ||
         state == AppLifecycleState.hidden ||
@@ -130,7 +135,6 @@ class _PrivateVaultAppState extends State<PrivateVaultApp>
 
   @override
   void dispose() {
-    _hiddenUnlockDebounce?.cancel();
     WidgetsBinding.instance.removeObserver(this);
     widget.lockController.detachConfidentialityBoundary(
       _confidentialityBoundary,
@@ -138,6 +142,12 @@ class _PrivateVaultAppState extends State<PrivateVaultApp>
     final panic = widget.panicService;
     if (panic != null) unawaited(panic.dispose());
     super.dispose();
+  }
+
+  Future<void> _refreshCalculatorPinLength() async {
+    final length = await _configuredPinLength();
+    if (!mounted || length == null || length == _calculatorPinLength) return;
+    setState(() => _calculatorPinLength = length);
   }
 
   Future<int?> _configuredPinLength() {
@@ -149,32 +159,26 @@ class _PrivateVaultAppState extends State<PrivateVaultApp>
     return _pinLengthFuture ??= lengthAware.configuredPinLength();
   }
 
-  void _onCalculatorSecretDigits(String digits) {
-    _hiddenUnlockDebounce?.cancel();
-    if (digits.isEmpty || !widget.lockController.isLocked) return;
-    _hiddenUnlockDebounce = Timer(const Duration(milliseconds: 120), () {
-      unawaited(_attemptHiddenUnlock(digits));
-    });
-  }
-
-  Future<void> _attemptHiddenUnlock(String digits) async {
+  Future<void> _attemptCalculatorUnlock(CalculatorUnlockAttempt attempt) async {
     if (_hiddenUnlockInFlight || !widget.lockController.isLocked) return;
 
     final configuredLength = await _configuredPinLength();
     if (!mounted || !widget.lockController.isLocked) return;
-    final requiredLength = configuredLength ?? 6;
-    if (digits.length < requiredLength) return;
-    final candidate = configuredLength == null
-        ? digits
-        : digits.substring(digits.length - configuredLength);
-    if (candidate.length < 4 || candidate.length > 12) return;
+    if (configuredLength == null ||
+        attempt.candidate.length != configuredLength) {
+      return;
+    }
 
     _hiddenUnlockInFlight = true;
     try {
-      if (!await widget.unlockService.verify(candidate)) return;
-      if (_settings.biometricsEnabled) {
+      if (!await widget.unlockService.verify(attempt.candidate)) return;
+      if (attempt.requiresBiometric) {
         final biometric = widget.biometricUnlock;
-        if (biometric == null || !await biometric.isAvailable()) return;
+        if (!_settings.biometricsEnabled ||
+            biometric == null ||
+            !await biometric.isAvailable()) {
+          return;
+        }
         if (!await biometric.authenticate()) return;
       }
       if (mounted && widget.lockController.isLocked) {
@@ -183,6 +187,12 @@ class _PrivateVaultAppState extends State<PrivateVaultApp>
     } finally {
       _hiddenUnlockInFlight = false;
     }
+  }
+
+  void _onCalculatorUnlockReleased(CalculatorUnlockTrigger trigger) {
+    if (trigger != CalculatorUnlockTrigger.equals) return;
+    final biometric = widget.biometricUnlock;
+    if (biometric != null) unawaited(biometric.cancel());
   }
 
   Future<void> _requestUnlock(BuildContext materialContext) async {
@@ -339,8 +349,17 @@ class _PrivateVaultAppState extends State<PrivateVaultApp>
           settings: const RouteSettings(name: '/secret'),
           builder: (_) => SecretWorkspace(
             onLock: widget.lockController.lock,
+            unlockService: widget.unlockService,
+            onPinChanged: () {
+              _pinLengthFuture = null;
+              unawaited(_refreshCalculatorPinLength());
+            },
             vaultRepository: widget.vaultRepository,
             mediaService: widget.mediaService,
+            onSystemHandoffChanged: (active) {
+              _systemHandoffActive = active;
+              if (!active) widget.lockController.onForeground();
+            },
             settings: _settings,
             disguiseBridge: widget.disguiseBridge,
             workProfileClient: widget.workProfileClient,
@@ -357,8 +376,12 @@ class _PrivateVaultAppState extends State<PrivateVaultApp>
   Widget _coverWorkspace(BuildContext materialContext) {
     return switch (_cover) {
       CoverKind.calculator => CalculatorCover(
-        onUnlockRequested: () => _requestUnlock(materialContext),
-        onSecretDigitsChanged: _onCalculatorSecretDigits,
+        pinLength: _calculatorPinLength,
+        biometricMode: _settings.biometricsEnabled,
+        holdDuration: Duration(milliseconds: _settings.unlockHoldMs),
+        onUnlockTriggered: (attempt) =>
+            unawaited(_attemptCalculatorUnlock(attempt)),
+        onUnlockReleased: _onCalculatorUnlockReleased,
       ),
       CoverKind.notes => NotesCover(
         onUnlockRequested: () => _requestUnlock(materialContext),
@@ -393,6 +416,9 @@ class SecretWorkspace extends StatefulWidget {
   const SecretWorkspace({
     super.key,
     required this.onLock,
+    required this.unlockService,
+    required this.onPinChanged,
+    required this.onSystemHandoffChanged,
     required this.settings,
     required this.onSettingsChanged,
     this.disguiseBridge,
@@ -403,6 +429,9 @@ class SecretWorkspace extends StatefulWidget {
   });
 
   final VoidCallback onLock;
+  final UnlockService unlockService;
+  final VoidCallback onPinChanged;
+  final ValueChanged<bool> onSystemHandoffChanged;
   final AppSettings settings;
   final ValueChanged<AppSettings> onSettingsChanged;
   final PlatformDisguiseBridge? disguiseBridge;
@@ -437,6 +466,7 @@ class _SecretWorkspaceState extends State<SecretWorkspace> {
               repository: widget.vaultRepository!,
               media: widget.mediaService!,
               confirmExport: widget.settings.confirmExport,
+              onSystemHandoffChanged: widget.onSystemHandoffChanged,
             )
           : const _VaultUnavailable();
     }
@@ -458,6 +488,8 @@ class _SecretWorkspaceState extends State<SecretWorkspace> {
     return _SettingsHome(
       key: const ValueKey('settings-home'),
       settings: widget.settings,
+      unlockService: widget.unlockService,
+      onPinChanged: widget.onPinChanged,
       disguiseBridge: widget.disguiseBridge,
       onChanged: widget.onSettingsChanged,
     );
@@ -538,11 +570,15 @@ class _SettingsHome extends StatefulWidget {
   const _SettingsHome({
     super.key,
     required this.settings,
+    required this.unlockService,
+    required this.onPinChanged,
     required this.onChanged,
     this.disguiseBridge,
   });
 
   final AppSettings settings;
+  final UnlockService unlockService;
+  final VoidCallback onPinChanged;
   final ValueChanged<AppSettings> onChanged;
   final PlatformDisguiseBridge? disguiseBridge;
 
@@ -586,6 +622,74 @@ class _SettingsHomeState extends State<_SettingsHome> {
   void _updateDraft(AppSettings next) {
     if (next == _draft) return;
     setState(() => _draft = next);
+  }
+
+  Future<void> _changePin() async {
+    var pin = '';
+    var confirm = '';
+    String? error;
+    await showDialog<void>(
+      context: context,
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (context, setDialogState) => AlertDialog(
+          title: const Text('Switch Vault PIN'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Text(
+                'The PIN selects the Vault identity. Existing data under other PINs is not deleted.',
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                key: const Key('settings-new-pin'),
+                obscureText: true,
+                keyboardType: TextInputType.number,
+                inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+                maxLength: 12,
+                decoration: const InputDecoration(labelText: 'New PIN'),
+                onChanged: (value) => pin = value,
+              ),
+              TextField(
+                key: const Key('settings-confirm-pin'),
+                obscureText: true,
+                keyboardType: TextInputType.number,
+                inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+                maxLength: 12,
+                decoration: InputDecoration(
+                  labelText: 'Confirm PIN',
+                  errorText: error,
+                ),
+                onChanged: (value) => confirm = value,
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              key: const Key('settings-save-pin'),
+              onPressed: () async {
+                if (pin != confirm) {
+                  setDialogState(() => error = 'PINs do not match');
+                  return;
+                }
+                try {
+                  await widget.unlockService.configure(pin);
+                } on InvalidPinException {
+                  setDialogState(() => error = 'Use 4-12 digits');
+                  return;
+                }
+                widget.onPinChanged();
+                if (dialogContext.mounted) Navigator.of(dialogContext).pop();
+              },
+              child: const Text('Switch PIN'),
+            ),
+          ],
+        ),
+      ),
+    );
   }
 
   @override
@@ -720,13 +824,48 @@ class _SettingsHomeState extends State<_SettingsHome> {
         _SettingsSection(
           title: 'Access',
           icon: Icons.fingerprint,
-          child: SwitchListTile(
-            contentPadding: EdgeInsets.zero,
-            title: const Text('Biometric unlock'),
-            subtitle: const Text('PIN remains the fallback and key owner.'),
-            value: settings.biometricsEnabled,
-            onChanged: (value) =>
-                _commit(settings.copyWith(biometricsEnabled: value)),
+          child: Column(
+            children: [
+              SwitchListTile(
+                contentPadding: EdgeInsets.zero,
+                title: const Text('Biometric mode'),
+                subtitle: Text(
+                  settings.biometricsEnabled
+                      ? 'Enter the full PIN, then hold =. Release = to cancel biometric scanning.'
+                      : 'Enter the full PIN, then hold the second PIN digit.',
+                ),
+                value: settings.biometricsEnabled,
+                onChanged: (value) =>
+                    _commit(settings.copyWith(biometricsEnabled: value)),
+              ),
+              ListTile(
+                contentPadding: EdgeInsets.zero,
+                leading: const Icon(Icons.password_outlined),
+                title: const Text('Switch Vault PIN'),
+                subtitle: const Text(
+                  'PIN changes are available only inside Settings.',
+                ),
+                trailing: const Icon(Icons.chevron_right),
+                onTap: _changePin,
+              ),
+              ListTile(
+                contentPadding: EdgeInsets.zero,
+                title: const Text('Unlock hold duration'),
+                subtitle: Slider(
+                  key: const Key('settings-unlock-hold-slider'),
+                  value: settings.unlockHoldMs.toDouble(),
+                  min: 700,
+                  max: 3000,
+                  divisions: 23,
+                  label:
+                      '${(settings.unlockHoldMs / 1000).toStringAsFixed(1)} s',
+                  onChanged: (value) => _updateDraft(
+                    settings.copyWith(unlockHoldMs: value.round()),
+                  ),
+                  onChangeEnd: (_) => widget.onChanged(_draft),
+                ),
+              ),
+            ],
           ),
         ),
         const SizedBox(height: 12),

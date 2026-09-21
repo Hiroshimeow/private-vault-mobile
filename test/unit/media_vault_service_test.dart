@@ -61,6 +61,31 @@ void main() {
     );
   });
 
+  test('multi import stores every selected file', () async {
+    final service = MediaVaultService(
+      repository: repo,
+      pickImport: () async => null,
+      pickImports: () async => [
+        PickedVaultData(
+          bytes: Uint8List.fromList([1, 2, 3]),
+          kind: VaultItemKind.image,
+        ),
+        PickedVaultData(
+          bytes: Uint8List.fromList([4, 5, 6]),
+          kind: VaultItemKind.video,
+        ),
+      ],
+      capturePhoto: () async => null,
+      saveExport: (_, _) async => true,
+    );
+
+    final items = await service.importFiles();
+
+    expect(items, hasLength(2));
+    expect(await repo.readBytes(items[0].id), Uint8List.fromList([1, 2, 3]));
+    expect(await repo.readBytes(items[1].id), Uint8List.fromList([4, 5, 6]));
+  });
+
   test('export reads decrypted bytes only after explicit call', () async {
     final item = await repo.addBytes(
       Uint8List.fromList([9, 8, 7]),

@@ -23,6 +23,10 @@ Future<void> main() async {
   final settingsStore = AppSettingsStore(SharedPreferencesSettingsStorage());
   final settings = await settingsStore.load();
   final secrets = FlutterSecureSecretStore();
+  final unlockService = SecureUnlockService(store: secrets);
+  if (!await unlockService.isConfigured()) {
+    await unlockService.configure('0000');
+  }
   final lockController = LockController();
   final repository = LocalVaultRepository(
     rootDirectory: () async {
@@ -35,6 +39,7 @@ Future<void> main() async {
   final media = MediaVaultService(
     repository: repository,
     pickImport: MediaVaultService.pickDeviceFile,
+    pickImports: MediaVaultService.pickDeviceFiles,
     capturePhoto: MediaVaultService.captureDevicePhoto,
     saveExport: MediaVaultService.saveDeviceExport,
   );
@@ -57,7 +62,7 @@ Future<void> main() async {
   runApp(
     PrivateVaultApp(
       lockController: lockController,
-      unlockService: SecureUnlockService(store: secrets),
+      unlockService: unlockService,
       biometricUnlock: DeviceBiometricUnlock(),
       vaultRepository: repository,
       mediaService: media,

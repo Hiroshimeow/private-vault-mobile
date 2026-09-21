@@ -12,11 +12,13 @@ class VaultHome extends StatefulWidget {
     required this.repository,
     required this.media,
     required this.confirmExport,
+    this.onSystemHandoffChanged,
   });
 
   final VaultRepository repository;
   final MediaVaultService media;
   final bool confirmExport;
+  final ValueChanged<bool>? onSystemHandoffChanged;
 
   @override
   State<VaultHome> createState() => _VaultHomeState();
@@ -60,18 +62,22 @@ class _VaultHomeState extends State<VaultHome> {
 
   Future<void> _import() async {
     setState(() => _busy = true);
+    widget.onSystemHandoffChanged?.call(true);
     try {
-      await widget.media.importFile();
+      await widget.media.importFiles();
     } finally {
+      widget.onSystemHandoffChanged?.call(false);
       await _reload();
     }
   }
 
   Future<void> _capture() async {
     setState(() => _busy = true);
+    widget.onSystemHandoffChanged?.call(true);
     try {
       await widget.media.capturePhoto();
     } finally {
+      widget.onSystemHandoffChanged?.call(false);
       await _reload();
     }
   }
@@ -177,10 +183,16 @@ class _VaultHomeState extends State<VaultHome> {
       if (confirmed != true) return;
     }
 
-    final ok = await widget.media.export(
-      item.id,
-      fileName: 'private-item-${item.id.substring(0, 8)}.bin',
-    );
+    widget.onSystemHandoffChanged?.call(true);
+    bool ok;
+    try {
+      ok = await widget.media.export(
+        item.id,
+        fileName: 'private-item-${item.id.substring(0, 8)}.bin',
+      );
+    } finally {
+      widget.onSystemHandoffChanged?.call(false);
+    }
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(content: Text(ok ? 'Exported' : 'Export canceled')),

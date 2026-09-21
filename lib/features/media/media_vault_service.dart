@@ -13,6 +13,7 @@ class PickedVaultData {
 }
 
 typedef PickVaultData = Future<PickedVaultData?> Function();
+typedef PickVaultDataList = Future<List<PickedVaultData>> Function();
 typedef SaveExport = Future<bool> Function(String fileName, Uint8List bytes);
 
 class MediaVaultService {
@@ -21,24 +22,43 @@ class MediaVaultService {
     required PickVaultData pickImport,
     required PickVaultData capturePhoto,
     required SaveExport saveExport,
-  }) => MediaVaultService._(repository, pickImport, capturePhoto, saveExport);
+    PickVaultDataList? pickImports,
+  }) => MediaVaultService._(
+    repository,
+    pickImport,
+    capturePhoto,
+    saveExport,
+    pickImports,
+  );
 
   MediaVaultService._(
     this._repository,
     this._pickImport,
     this._capturePhoto,
     this._saveExport,
+    this._pickImports,
   );
 
   final VaultRepository _repository;
   final PickVaultData _pickImport;
   final PickVaultData _capturePhoto;
   final SaveExport _saveExport;
+  final PickVaultDataList? _pickImports;
 
   Future<VaultItem?> importFile() async {
     final picked = await _pickImport();
     if (picked == null) return null;
     return _repository.addBytes(picked.bytes, kind: picked.kind);
+  }
+
+  Future<List<VaultItem>> importFiles() async {
+    final picker = _pickImports;
+    final picked = picker != null ? await picker() : [?await _pickImport()];
+    final imported = <VaultItem>[];
+    for (final item in picked) {
+      imported.add(await _repository.addBytes(item.bytes, kind: item.kind));
+    }
+    return imported;
   }
 
   Future<VaultItem?> capturePhoto() async {
@@ -62,6 +82,21 @@ class MediaVaultService {
       bytes: Uint8List.fromList(bytes),
       kind: _kindFromName(picked.name),
     );
+  }
+
+  static Future<List<PickedVaultData>> pickDeviceFiles() async {
+    final picked = await FilePicker.pickFiles(type: FileType.any);
+    final result = <PickedVaultData>[];
+    for (final file in picked) {
+      final bytes = await file.readAsBytes();
+      result.add(
+        PickedVaultData(
+          bytes: Uint8List.fromList(bytes),
+          kind: _kindFromName(file.name),
+        ),
+      );
+    }
+    return result;
   }
 
   static Future<PickedVaultData?> captureDevicePhoto() async {

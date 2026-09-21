@@ -13,6 +13,7 @@ class AppSettings {
     required this.faceDownDelayMs,
     required this.autoLockSeconds,
     required this.biometricsEnabled,
+    this.unlockHoldMs = 2000,
     required this.browserClearOnClose,
     required this.confirmExport,
     required this.darkMode,
@@ -26,6 +27,7 @@ class AppSettings {
       faceDownDelayMs = 1200,
       autoLockSeconds = 0,
       biometricsEnabled = false,
+      unlockHoldMs = 2000,
       browserClearOnClose = true,
       confirmExport = true,
       darkMode = false;
@@ -37,6 +39,7 @@ class AppSettings {
   final int faceDownDelayMs;
   final int autoLockSeconds;
   final bool biometricsEnabled;
+  final int unlockHoldMs;
   final bool browserClearOnClose;
   final bool confirmExport;
   final bool darkMode;
@@ -49,6 +52,7 @@ class AppSettings {
     int? faceDownDelayMs,
     int? autoLockSeconds,
     bool? biometricsEnabled,
+    int? unlockHoldMs,
     bool? browserClearOnClose,
     bool? confirmExport,
     bool? darkMode,
@@ -61,6 +65,7 @@ class AppSettings {
       faceDownDelayMs: faceDownDelayMs ?? this.faceDownDelayMs,
       autoLockSeconds: autoLockSeconds ?? this.autoLockSeconds,
       biometricsEnabled: biometricsEnabled ?? this.biometricsEnabled,
+      unlockHoldMs: unlockHoldMs ?? this.unlockHoldMs,
       browserClearOnClose: browserClearOnClose ?? this.browserClearOnClose,
       confirmExport: confirmExport ?? this.confirmExport,
       darkMode: darkMode ?? this.darkMode,
@@ -75,6 +80,7 @@ class AppSettings {
     'faceDownDelayMs': faceDownDelayMs,
     'autoLockSeconds': autoLockSeconds,
     'biometricsEnabled': biometricsEnabled,
+    'unlockHoldMs': unlockHoldMs,
     'browserClearOnClose': browserClearOnClose,
     'confirmExport': confirmExport,
     'darkMode': darkMode,
@@ -89,6 +95,7 @@ class AppSettings {
     final faceDown = raw['faceDownDelayMs'];
     final autoLock = raw['autoLockSeconds'];
     final biometrics = raw['biometricsEnabled'];
+    final unlockHold = raw['unlockHoldMs'] ?? 2000;
     final clearOnClose = raw['browserClearOnClose'];
     final confirmExport = raw['confirmExport'];
     final darkMode = raw['darkMode'];
@@ -100,6 +107,7 @@ class AppSettings {
         faceDown is! int ||
         autoLock is! int ||
         biometrics is! bool ||
+        unlockHold is! int ||
         clearOnClose is! bool ||
         confirmExport is! bool ||
         darkMode is! bool) {
@@ -115,7 +123,9 @@ class AppSettings {
         faceDown < 300 ||
         faceDown > 5000 ||
         autoLock < 0 ||
-        autoLock > 3600) {
+        autoLock > 3600 ||
+        unlockHold < 700 ||
+        unlockHold > 3000) {
       return null;
     }
 
@@ -127,6 +137,7 @@ class AppSettings {
       faceDownDelayMs: faceDown,
       autoLockSeconds: autoLock,
       biometricsEnabled: biometrics,
+      unlockHoldMs: unlockHold,
       browserClearOnClose: clearOnClose,
       confirmExport: confirmExport,
       darkMode: darkMode,
@@ -143,6 +154,7 @@ class AppSettings {
       other.faceDownDelayMs == faceDownDelayMs &&
       other.autoLockSeconds == autoLockSeconds &&
       other.biometricsEnabled == biometricsEnabled &&
+      other.unlockHoldMs == unlockHoldMs &&
       other.browserClearOnClose == browserClearOnClose &&
       other.confirmExport == confirmExport &&
       other.darkMode == darkMode;
@@ -156,6 +168,7 @@ class AppSettings {
     faceDownDelayMs,
     autoLockSeconds,
     biometricsEnabled,
+    unlockHoldMs,
     browserClearOnClose,
     confirmExport,
     darkMode,

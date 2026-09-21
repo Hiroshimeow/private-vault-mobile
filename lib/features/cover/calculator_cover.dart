@@ -1,16 +1,21 @@
-import 'dart:async';
-
 import 'package:flutter/material.dart';
+import 'package:private_vault_mobile/features/auth/unlock_gate/calculator_unlock_gate.dart';
 
 class CalculatorCover extends StatefulWidget {
   const CalculatorCover({
     super.key,
-    required this.onUnlockRequested,
-    this.onSecretDigitsChanged,
+    this.pinLength = 4,
+    this.biometricMode = false,
+    this.holdDuration = const Duration(seconds: 2),
+    this.onUnlockTriggered,
+    this.onUnlockReleased,
   });
 
-  final VoidCallback onUnlockRequested;
-  final ValueChanged<String>? onSecretDigitsChanged;
+  final int pinLength;
+  final bool biometricMode;
+  final Duration holdDuration;
+  final ValueChanged<CalculatorUnlockAttempt>? onUnlockTriggered;
+  final ValueChanged<CalculatorUnlockTrigger>? onUnlockReleased;
 
   @override
   State<CalculatorCover> createState() => _CalculatorCoverState();
@@ -21,12 +26,40 @@ class _CalculatorCoverState extends State<CalculatorCover> {
   double? _left;
   String? _operator;
   bool _replace = true;
-  String _secretDigits = '';
-  Timer? _secretResetTimer;
+  late final CalculatorUnlockGateController _unlockGate;
+
+  @override
+  void initState() {
+    super.initState();
+    _unlockGate = _newUnlockGate();
+  }
+
+  CalculatorUnlockGateController _newUnlockGate() =>
+      CalculatorUnlockGateController(
+        pinLength: widget.pinLength,
+        mode: widget.biometricMode
+            ? CalculatorUnlockMode.biometric
+            : CalculatorUnlockMode.pin,
+        holdDuration: widget.holdDuration,
+        onTriggered: (attempt) => widget.onUnlockTriggered?.call(attempt),
+        onReleased: (trigger) => widget.onUnlockReleased?.call(trigger),
+      );
+
+  @override
+  void didUpdateWidget(covariant CalculatorCover oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    _unlockGate.update(
+      pinLength: widget.pinLength,
+      mode: widget.biometricMode
+          ? CalculatorUnlockMode.biometric
+          : CalculatorUnlockMode.pin,
+      holdDuration: widget.holdDuration,
+    );
+  }
 
   @override
   void dispose() {
-    _secretResetTimer?.cancel();
+    _unlockGate.dispose();
     super.dispose();
   }
 
@@ -39,24 +72,10 @@ class _CalculatorCoverState extends State<CalculatorCover> {
         _display += digit;
       }
     });
-    _secretDigits = '$_secretDigits$digit';
-    if (_secretDigits.length > 12) {
-      _secretDigits = _secretDigits.substring(_secretDigits.length - 12);
-    }
-    widget.onSecretDigitsChanged?.call(_secretDigits);
-    _secretResetTimer?.cancel();
-    _secretResetTimer = Timer(const Duration(milliseconds: 700), () {
-      _secretDigits = '';
-      widget.onSecretDigitsChanged?.call('');
-    });
+    _unlockGate.recordDigit(digit);
   }
 
-  void _resetSecretDigits() {
-    _secretResetTimer?.cancel();
-    if (_secretDigits.isEmpty) return;
-    _secretDigits = '';
-    widget.onSecretDigitsChanged?.call('');
-  }
+  void _resetSecretDigits() => _unlockGate.clear();
 
   void _operation(String operator) {
     _resetSecretDigits();
@@ -196,13 +215,7 @@ class _CalculatorCoverState extends State<CalculatorCover> {
     ];
 
     return Scaffold(
-      appBar: AppBar(
-        title: GestureDetector(
-          key: const Key('cover-title'),
-          onLongPress: widget.onUnlockRequested,
-          child: const Text('Calculator'),
-        ),
-      ),
+      appBar: AppBar(title: const Text('Calculator', key: Key('cover-title'))),
       body: SafeArea(
         child: Padding(
           padding: const EdgeInsets.fromLTRB(16, 12, 16, 16),
@@ -267,20 +280,36 @@ class _CalculatorCoverState extends State<CalculatorCover> {
                                       ),
                                       button: true,
                                       excludeSemantics: true,
-                                      child: FilledButton(
-                                        key: Key(
-                                          <String>[
-                                            'calculator-key-',
+                                      child: Listener(
+                                        onPointerDown: (_) =>
+                                            _unlockGate.keyDown(
+                                              labels[(row * 4) + column],
+                                            ),
+                                        onPointerUp: (_) => _unlockGate.keyUp(
+                                          labels[(row * 4) + column],
+                                        ),
+                                        onPointerCancel: (_) =>
+                                            _unlockGate.cancelHold(),
+                                        child: FilledButton(
+                                          key: Key(
+                                            <String>[
+                                              'calculator-key-',
+                                              labels[(row * 4) + column],
+                                            ].join(),
+                                          ),
+                                          style: _buttonStyle(
+                                            context,
+                                            _roleFor(
+                                              labels[(row * 4) + column],
+                                            ),
+                                          ),
+                                          onPressed: () => _press(
                                             labels[(row * 4) + column],
-                                          ].join(),
+                                          ),
+                                          child: Text(
+                                            labels[(row * 4) + column],
+                                          ),
                                         ),
-                                        style: _buttonStyle(
-                                          context,
-                                          _roleFor(labels[(row * 4) + column]),
-                                        ),
-                                        onPressed: () =>
-                                            _press(labels[(row * 4) + column]),
-                                        child: Text(labels[(row * 4) + column]),
                                       ),
                                     ),
                                   ),

@@ -102,20 +102,12 @@ Future<void> _expectGolden(WidgetTester tester, String filename) async {
 
 void main() {
   testWidgets('calculator light golden', (tester) async {
-    await _pumpSurface(
-      tester,
-      CalculatorCover(onUnlockRequested: () {}),
-      brightness: Brightness.light,
-    );
+    await _pumpSurface(tester, CalculatorCover(), brightness: Brightness.light);
     await _expectGolden(tester, 'calculator_light.png');
   });
 
   testWidgets('calculator dark golden', (tester) async {
-    await _pumpSurface(
-      tester,
-      CalculatorCover(onUnlockRequested: () {}),
-      brightness: Brightness.dark,
-    );
+    await _pumpSurface(tester, CalculatorCover(), brightness: Brightness.dark);
     await _expectGolden(tester, 'calculator_dark.png');
   });
 
