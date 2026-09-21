@@ -53,6 +53,55 @@ class WorkProfileNativePolicyTest {
     }
 
     @Test
+    fun `short bridge operations fail quickly while installer confirmation stays long`() {
+        assertEquals(
+            5_000L,
+            WorkProfileNativePolicy.bridgeTimeoutMs(
+                WorkProfileProtocol.ACTION_LIST_WORK_APPS,
+            ),
+        )
+        assertEquals(
+            5 * 60 * 1_000L,
+            WorkProfileNativePolicy.bridgeTimeoutMs(WorkProfileProtocol.ACTION_CLONE),
+        )
+        assertEquals(
+            NativeWorkProfileErrorCode.BRIDGE_TIMEOUT,
+            WorkProfileNativePolicy.bridgeTimeoutError(
+                WorkProfileProtocol.ACTION_LAUNCH,
+            ),
+        )
+        assertEquals(
+            NativeWorkProfileErrorCode.USER_ACTION_REQUIRED,
+            WorkProfileNativePolicy.bridgeTimeoutError(
+                WorkProfileProtocol.ACTION_UNINSTALL,
+            ),
+        )
+    }
+
+    @Test
+    fun `launch package polling is bounded`() {
+        assertEquals(true, WorkProfileNativePolicy.shouldContinuePolling(2_900, 3_000))
+        assertEquals(false, WorkProfileNativePolicy.shouldContinuePolling(3_000, 3_000))
+        assertEquals(false, WorkProfileNativePolicy.shouldContinuePolling(3_500, 3_000))
+    }
+
+    @Test
+    fun `authenticated quiet profile is distinct from conflicting profile`() {
+        assertEquals(
+            NativeWorkProfileState.QUIET,
+            WorkProfileNativePolicy.capabilityState(
+                supported = true,
+                profileOwner = false,
+                bridgeResolvable = false,
+                hasControlToken = true,
+                provisioningAllowed = false,
+                profileCount = 2,
+                profileQuiet = true,
+            ),
+        )
+    }
+
+    @Test
     fun `ready state requires owner or authenticated reachable bridge`() {
         assertEquals(
             NativeWorkProfileState.READY,
@@ -63,6 +112,7 @@ class WorkProfileNativePolicyTest {
                 hasControlToken = false,
                 provisioningAllowed = false,
                 profileCount = 1,
+                profileQuiet = false,
             ),
         )
         assertEquals(
@@ -74,6 +124,7 @@ class WorkProfileNativePolicyTest {
                 hasControlToken = true,
                 provisioningAllowed = false,
                 profileCount = 2,
+                profileQuiet = false,
             ),
         )
         assertEquals(
@@ -85,6 +136,7 @@ class WorkProfileNativePolicyTest {
                 hasControlToken = false,
                 provisioningAllowed = false,
                 profileCount = 2,
+                profileQuiet = false,
             ),
         )
     }

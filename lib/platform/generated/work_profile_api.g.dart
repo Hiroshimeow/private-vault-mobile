@@ -102,6 +102,7 @@ enum NativeWorkProfileState {
   absent,
   provisioning,
   ready,
+  quiet,
   conflictingProfile,
   policyDenied,
 }
@@ -124,6 +125,7 @@ enum NativeWorkProfileErrorCode {
   packageIneligible,
   installerFailure,
   storeFallbackRequired,
+  bridgeTimeout,
   oemUnsupported,
   unauthorized,
 }

@@ -66,6 +66,35 @@ void main() {
     expect(policy, contains('<wipe-data'));
   });
 
+  test(
+    'bridge reliability has bounded timeout quiet state and launch polling',
+    () async {
+      final adapter = await File(
+        'android/app/src/main/kotlin/io/hiroshimeow/private_vault_mobile/WorkProfileHostApiAdapter.kt',
+      ).readAsString();
+      final bridge = await File(
+        'android/app/src/main/kotlin/io/hiroshimeow/private_vault_mobile/WorkProfileBridgeActivity.kt',
+      ).readAsString();
+      final policy = await File(
+        'android/app/src/main/kotlin/io/hiroshimeow/private_vault_mobile/WorkProfileNativePolicy.kt',
+      ).readAsString();
+
+      expect(policy, contains('FAST_BRIDGE_TIMEOUT_MS'));
+      expect(policy, contains('USER_CONFIRMATION_TIMEOUT_MS'));
+      expect(policy, contains('bridgeTimeoutMs'));
+      expect(policy, contains('bridgeTimeoutError'));
+      expect(policy, contains('shouldContinuePolling'));
+      expect(adapter, contains('isQuietModeEnabled'));
+      expect(adapter, contains('profileQuiet ='));
+      expect(policy, contains('NativeWorkProfileState.QUIET'));
+      expect(adapter, isNot(contains('requestQuietModeEnabled')));
+      expect(bridge, contains('setApplicationHidden'));
+      expect(bridge, contains('setPackagesSuspended'));
+      expect(bridge, contains('PACKAGE_STATE_TIMEOUT_MS'));
+      expect(bridge, contains('queryIntentActivities'));
+    },
+  );
+
   test('package visibility remains narrow', () async {
     final manifest = await File('android/app/src/main/AndroidManifest.xml')
         .readAsString();

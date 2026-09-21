@@ -114,27 +114,38 @@ internal object WorkProfileResultRegistry {
     private val entries = mutableMapOf<Int, Entry>()
 
     @Synchronized
-    fun register(requestId: Int, callback: (Int, Intent?) -> Unit) {
+    fun register(
+        requestId: Int,
+        timeoutMs: Long,
+        timeoutCode: NativeWorkProfileErrorCode,
+        callback: (Int, Intent?) -> Unit,
+    ) {
         cancel(requestId)
         val timeout = Runnable {
             val pending = synchronized(this) { entries.remove(requestId) }
                 ?: return@Runnable
+            val message = when (timeoutCode) {
+                NativeWorkProfileErrorCode.BRIDGE_TIMEOUT ->
+                    "Work Profile did not respond. Turn it on and retry."
+                else ->
+                    "Work-profile operation did not complete. Retry after Android finishes any pending confirmation."
+            }
             pending.callback(
                 Activity.RESULT_CANCELED,
                 Intent()
                     .putExtra(WorkProfileProtocol.EXTRA_OK, false)
                     .putExtra(
                         WorkProfileProtocol.EXTRA_ERROR_CODE,
-                        NativeWorkProfileErrorCode.USER_ACTION_REQUIRED.name,
+                        timeoutCode.name,
                     )
                     .putExtra(
                         WorkProfileProtocol.EXTRA_MESSAGE,
-                        "Work-profile operation did not complete. Retry after Android finishes any pending confirmation.",
+                        message,
                     ),
             )
         }
         entries[requestId] = Entry(callback, timeout)
-        mainHandler.postDelayed(timeout, BRIDGE_RESULT_TIMEOUT_MS)
+        mainHandler.postDelayed(timeout, timeoutMs)
     }
 
     @Synchronized
@@ -152,7 +163,6 @@ internal object WorkProfileResultRegistry {
         mainHandler.removeCallbacks(entry.timeout)
     }
 
-    private const val BRIDGE_RESULT_TIMEOUT_MS = 5 * 60 * 1000L
 }
 
 class WorkProfileResultReceiver : BroadcastReceiver() {
@@ -230,6 +240,12 @@ class WorkProfileHostApiAdapter(
         val profileOwner = isProfileOwner()
         val bridgeResolvable = isBridgeResolvable()
         val hasControlToken = WorkProfileControlToken.read(context) != null
+        val profiles = userManager.userProfiles
+        val otherProfile = profiles.firstOrNull { it != android.os.Process.myUserHandle() }
+        val profileQuiet =
+            hasControlToken &&
+                otherProfile != null &&
+                runCatching { userManager.isQuietModeEnabled(otherProfile) }.getOrDefault(false)
         val provisioningAllowed =
             supported &&
                 dpm.isProvisioningAllowed(
@@ -241,7 +257,8 @@ class WorkProfileHostApiAdapter(
             bridgeResolvable = bridgeResolvable,
             hasControlToken = hasControlToken,
             provisioningAllowed = provisioningAllowed,
-            profileCount = userManager.userProfiles.size,
+            profileCount = profiles.size,
+            profileQuiet = profileQuiet,
         )
         return NativeWorkProfileCapability(
             supported = supported,
@@ -476,7 +493,11 @@ class WorkProfileHostApiAdapter(
         cleanup: () -> Unit = {},
     ) {
         val requestCode = allocateRequestCode()
-        WorkProfileResultRegistry.register(requestCode) { resultCode, data ->
+        WorkProfileResultRegistry.register(
+            requestCode = requestCode,
+            timeoutMs = WorkProfileNativePolicy.bridgeTimeoutMs(intent.action),
+            timeoutCode = WorkProfileNativePolicy.bridgeTimeoutError(intent.action),
+        ) { resultCode, data ->
             try {
                 callback(Result.success(operationResult(resultCode, data)))
             } finally {
@@ -510,10 +531,17 @@ class WorkProfileHostApiAdapter(
         callback: (Result<List<NativeManagedAppState>>) -> Unit,
     ) {
         val requestCode = allocateRequestCode()
-        WorkProfileResultRegistry.register(requestCode) { resultCode, data ->
+        WorkProfileResultRegistry.register(
+            requestCode = requestCode,
+            timeoutMs = WorkProfileNativePolicy.FAST_BRIDGE_TIMEOUT_MS,
+            timeoutCode = NativeWorkProfileErrorCode.BRIDGE_TIMEOUT,
+        ) { resultCode, data ->
             try {
                 if (resultCode != Activity.RESULT_OK || data == null) {
-                    throw IllegalStateException("Work profile did not return an app inventory.")
+                    throw IllegalStateException(
+                        data?.getStringExtra(WorkProfileProtocol.EXTRA_MESSAGE)
+                            ?: "Work profile did not return an app inventory.",
+                    )
                 }
                 val raw = data.getStringExtra(WorkProfileProtocol.EXTRA_APPS_JSON) ?: "[]"
                 val array = JSONArray(raw)
@@ -546,10 +574,17 @@ class WorkProfileHostApiAdapter(
         callback: (Result<NativeManagedAppState?>) -> Unit,
     ) {
         val requestCode = allocateRequestCode()
-        WorkProfileResultRegistry.register(requestCode) { resultCode, data ->
+        WorkProfileResultRegistry.register(
+            requestCode = requestCode,
+            timeoutMs = WorkProfileNativePolicy.FAST_BRIDGE_TIMEOUT_MS,
+            timeoutCode = NativeWorkProfileErrorCode.BRIDGE_TIMEOUT,
+        ) { resultCode, data ->
             try {
                 if (resultCode != Activity.RESULT_OK || data == null) {
-                    throw IllegalStateException("Work profile did not return app state.")
+                    throw IllegalStateException(
+                        data?.getStringExtra(WorkProfileProtocol.EXTRA_MESSAGE)
+                            ?: "Work profile did not return app state.",
+                    )
                 }
                 val raw = data.getStringExtra(WorkProfileProtocol.EXTRA_APP_JSON)
                 callback(Result.success(raw?.let { nativeAppState(JSONObject(it)) }))

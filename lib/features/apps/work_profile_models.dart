@@ -3,6 +3,7 @@ enum WorkProfileState {
   absent,
   provisioning,
   ready,
+  quiet,
   conflictingProfile,
   policyDenied,
 }
@@ -25,6 +26,7 @@ enum WorkProfileErrorCode {
   packageIneligible,
   installerFailure,
   storeFallbackRequired,
+  bridgeTimeout,
   oemUnsupported,
   unauthorized,
 }

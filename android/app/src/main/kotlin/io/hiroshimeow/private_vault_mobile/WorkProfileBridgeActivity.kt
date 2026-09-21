@@ -13,6 +13,7 @@ import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import org.json.JSONArray
 import org.json.JSONObject
 import java.security.MessageDigest
@@ -257,16 +258,95 @@ class WorkProfileBridgeActivity : Activity() {
                 NativeWorkProfileErrorCode.PACKAGE_INELIGIBLE,
                 "Missing package name.",
             )
-        val launchIntent = packageManager.getLaunchIntentForPackage(targetPackage)
-            ?: return finishFailure(
-                NativeWorkProfileErrorCode.PACKAGE_INELIGIBLE,
-                "This work-profile app has no launchable activity.",
-            )
-        return try {
-            startActivity(launchIntent)
-            finishSuccess()
-        } catch (error: Exception) {
-            finishFailure(NativeWorkProfileErrorCode.OEM_UNSUPPORTED, error.message)
+
+        Thread {
+            try {
+                val hidden =
+                    runCatching { dpm.isApplicationHidden(admin, targetPackage) }
+                        .getOrDefault(false)
+                if (hidden && !dpm.setApplicationHidden(admin, targetPackage, false)) {
+                    return@Thread postFailure(
+                        NativeWorkProfileErrorCode.POLICY_DENIED,
+                        "Android refused to unhide this work-profile app.",
+                    )
+                }
+
+                val failedToUnsuspend =
+                    dpm.setPackagesSuspended(admin, arrayOf(targetPackage), false)
+                if (failedToUnsuspend.isNotEmpty()) {
+                    return@Thread postFailure(
+                        NativeWorkProfileErrorCode.POLICY_DENIED,
+                        "Android refused to unfreeze this work-profile app.",
+                    )
+                }
+
+                val startedAt = SystemClock.elapsedRealtime()
+                var launchIntent = packageManager.getLaunchIntentForPackage(targetPackage)
+                while (
+                    launchIntent == null &&
+                    WorkProfileNativePolicy.shouldContinuePolling(
+                        SystemClock.elapsedRealtime() - startedAt,
+                        WorkProfileNativePolicy.PACKAGE_STATE_TIMEOUT_MS,
+                    )
+                ) {
+                    Thread.sleep(WorkProfileNativePolicy.PACKAGE_STATE_POLL_MS)
+                    launchIntent = packageManager.getLaunchIntentForPackage(targetPackage)
+                }
+
+                if (launchIntent == null) {
+                    val launcherQuery =
+                        Intent(Intent.ACTION_MAIN)
+                            .addCategory(Intent.CATEGORY_LAUNCHER)
+                            .setPackage(targetPackage)
+                    val resolved = packageManager.queryIntentActivities(launcherQuery, 0).firstOrNull()
+                    if (resolved != null) {
+                        launchIntent =
+                            Intent(Intent.ACTION_MAIN)
+                                .addCategory(Intent.CATEGORY_LAUNCHER)
+                                .setComponent(
+                                    ComponentName(
+                                        targetPackage,
+                                        resolved.activityInfo.name,
+                                    ),
+                                )
+                    }
+                }
+
+                val finalLaunchIntent = launchIntent
+                if (finalLaunchIntent == null) {
+                    return@Thread postFailure(
+                        NativeWorkProfileErrorCode.PACKAGE_INELIGIBLE,
+                        "This work-profile app has no launchable activity.",
+                    )
+                }
+
+                Handler(Looper.getMainLooper()).post {
+                    try {
+                        startActivity(finalLaunchIntent)
+                        rememberManagedPackage(targetPackage)
+                        finishSuccess()
+                    } catch (error: Exception) {
+                        finishFailure(
+                            NativeWorkProfileErrorCode.OEM_UNSUPPORTED,
+                            error.message,
+                        )
+                    }
+                }
+            } catch (error: InterruptedException) {
+                Thread.currentThread().interrupt()
+                postFailure(
+                    NativeWorkProfileErrorCode.BRIDGE_TIMEOUT,
+                    "Launching the work-profile app was interrupted.",
+                )
+            } catch (error: Exception) {
+                postFailure(NativeWorkProfileErrorCode.POLICY_DENIED, error.message)
+            }
+        }.start()
+    }
+
+    private fun postFailure(code: NativeWorkProfileErrorCode, message: String?) {
+        Handler(Looper.getMainLooper()).post {
+            finishFailure(code, message)
         }
     }
 

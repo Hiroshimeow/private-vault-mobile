@@ -146,6 +146,11 @@ class _WorkProfileHomeState extends State<WorkProfileHome> {
           'Finish Android setup',
           'Complete the system-managed work-profile provisioning flow.',
         ),
+        WorkProfileState.quiet => (
+          'Isolated apps are paused',
+          'Turn Work Profile back on from Android Quick Settings or system '
+              'settings, then refresh this page.',
+        ),
         WorkProfileState.conflictingProfile => (
           'Existing work profile detected',
           'Another organization or DPC already owns the available managed '

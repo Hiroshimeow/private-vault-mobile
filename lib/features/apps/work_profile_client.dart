@@ -113,6 +113,7 @@ class PigeonWorkProfileClient implements WorkProfileClient {
     native.NativeWorkProfileState.absent => WorkProfileState.absent,
     native.NativeWorkProfileState.provisioning => WorkProfileState.provisioning,
     native.NativeWorkProfileState.ready => WorkProfileState.ready,
+    native.NativeWorkProfileState.quiet => WorkProfileState.quiet,
     native.NativeWorkProfileState.conflictingProfile =>
       WorkProfileState.conflictingProfile,
     native.NativeWorkProfileState.policyDenied => WorkProfileState.policyDenied,
@@ -164,6 +165,8 @@ class PigeonWorkProfileClient implements WorkProfileClient {
           WorkProfileErrorCode.installerFailure,
         native.NativeWorkProfileErrorCode.storeFallbackRequired =>
           WorkProfileErrorCode.storeFallbackRequired,
+        native.NativeWorkProfileErrorCode.bridgeTimeout =>
+          WorkProfileErrorCode.bridgeTimeout,
         native.NativeWorkProfileErrorCode.oemUnsupported =>
           WorkProfileErrorCode.oemUnsupported,
         native.NativeWorkProfileErrorCode.unauthorized =>

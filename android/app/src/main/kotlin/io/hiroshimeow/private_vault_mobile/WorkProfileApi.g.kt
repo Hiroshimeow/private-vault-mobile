@@ -197,8 +197,9 @@ enum class NativeWorkProfileState(val raw: Int) {
   ABSENT(1),
   PROVISIONING(2),
   READY(3),
-  CONFLICTING_PROFILE(4),
-  POLICY_DENIED(5);
+  QUIET(4),
+  CONFLICTING_PROFILE(5),
+  POLICY_DENIED(6);
 
   companion object {
     fun ofRaw(raw: Int): NativeWorkProfileState? {
@@ -231,8 +232,9 @@ enum class NativeWorkProfileErrorCode(val raw: Int) {
   PACKAGE_INELIGIBLE(5),
   INSTALLER_FAILURE(6),
   STORE_FALLBACK_REQUIRED(7),
-  OEM_UNSUPPORTED(8),
-  UNAUTHORIZED(9);
+  BRIDGE_TIMEOUT(8),
+  OEM_UNSUPPORTED(9),
+  UNAUTHORIZED(10);
 
   companion object {
     fun ofRaw(raw: Int): NativeWorkProfileErrorCode? {

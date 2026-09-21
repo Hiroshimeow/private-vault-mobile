@@ -3,6 +3,11 @@ package io.hiroshimeow.private_vault_mobile
 import android.content.pm.PackageInstaller
 
 internal object WorkProfileNativePolicy {
+    const val FAST_BRIDGE_TIMEOUT_MS = 5_000L
+    const val USER_CONFIRMATION_TIMEOUT_MS = 5 * 60 * 1_000L
+    const val PACKAGE_STATE_TIMEOUT_MS = 3_000L
+    const val PACKAGE_STATE_POLL_MS = 100L
+
     fun apkSourcePaths(baseSource: String, splitSources: Array<String>?): List<String> =
         buildList {
             add(baseSource)
@@ -21,6 +26,25 @@ internal object WorkProfileNativePolicy {
             else -> NativeWorkProfileErrorCode.INSTALLER_FAILURE
         }
 
+    fun bridgeTimeoutMs(action: String?): Long =
+        when (action) {
+            WorkProfileProtocol.ACTION_CLONE,
+            WorkProfileProtocol.ACTION_UNINSTALL,
+            -> USER_CONFIRMATION_TIMEOUT_MS
+            else -> FAST_BRIDGE_TIMEOUT_MS
+        }
+
+    fun bridgeTimeoutError(action: String?): NativeWorkProfileErrorCode =
+        when (action) {
+            WorkProfileProtocol.ACTION_CLONE,
+            WorkProfileProtocol.ACTION_UNINSTALL,
+            -> NativeWorkProfileErrorCode.USER_ACTION_REQUIRED
+            else -> NativeWorkProfileErrorCode.BRIDGE_TIMEOUT
+        }
+
+    fun shouldContinuePolling(elapsedMs: Long, timeoutMs: Long): Boolean =
+        elapsedMs < timeoutMs
+
     fun capabilityState(
         supported: Boolean,
         profileOwner: Boolean,
@@ -28,11 +52,12 @@ internal object WorkProfileNativePolicy {
         hasControlToken: Boolean,
         provisioningAllowed: Boolean,
         profileCount: Int,
+        profileQuiet: Boolean,
     ): NativeWorkProfileState {
         if (!supported) return NativeWorkProfileState.UNSUPPORTED
-        if (profileOwner || (bridgeResolvable && hasControlToken)) {
-            return NativeWorkProfileState.READY
-        }
+        if (profileOwner) return NativeWorkProfileState.READY
+        if (hasControlToken && profileQuiet) return NativeWorkProfileState.QUIET
+        if (bridgeResolvable && hasControlToken) return NativeWorkProfileState.READY
         if (provisioningAllowed) return NativeWorkProfileState.ABSENT
         return if (profileCount > 1) {
             NativeWorkProfileState.CONFLICTING_PROFILE
