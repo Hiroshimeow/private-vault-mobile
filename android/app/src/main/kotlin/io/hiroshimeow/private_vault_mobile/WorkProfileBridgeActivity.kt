@@ -403,14 +403,18 @@ class WorkProfileBridgeActivity : Activity() {
                     .setPackage(targetPackage)
                     .setType(mimeType)
                     .putExtra(Intent.EXTRA_STREAM, uri)
-                    .setClipData(clip)
-                    .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                    .apply {
+                        clipData = clip
+                        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                    }
             val viewIntent =
                 Intent(Intent.ACTION_VIEW)
                     .setPackage(targetPackage)
                     .setDataAndType(uri, mimeType)
-                    .setClipData(clip)
-                    .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                    .apply {
+                        clipData = clip
+                        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                    }
 
             val targetIntent =
                 when {

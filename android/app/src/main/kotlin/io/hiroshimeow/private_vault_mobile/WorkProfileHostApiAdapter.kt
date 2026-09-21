@@ -478,14 +478,15 @@ class WorkProfileHostApiAdapter(
                 .putExtra(WorkProfileProtocol.EXTRA_PACKAGE_NAME, packageName)
                 .putExtra(WorkProfileProtocol.EXTRA_MIME_TYPE, mimeType)
                 .putExtra(WorkProfileProtocol.EXTRA_DISPLAY_NAME, displayName)
-                .setClipData(
-                    ClipData.newUri(
-                        context.contentResolver,
-                        displayName,
-                        uri,
-                    ),
-                )
-                .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                .apply {
+                    clipData =
+                        ClipData.newUri(
+                            context.contentResolver,
+                            displayName,
+                            uri,
+                        )
+                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                }
         launchOperation(intent, callback)
     }
 
