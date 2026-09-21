@@ -3,6 +3,7 @@ import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:private_vault_mobile/app/private_vault_app.dart';
+import 'package:private_vault_mobile/features/apps/vault_shuttle_service.dart';
 import 'package:private_vault_mobile/features/auth/biometric_unlock.dart';
 import 'package:private_vault_mobile/features/auth/lock_controller.dart';
 import 'package:private_vault_mobile/features/cover/calculator_cover.dart';
@@ -86,6 +87,24 @@ MediaVaultService boundaryMedia(BoundaryVaultRepository repository) {
     capturePhoto: () async => null,
     saveExport: (_, _) async => true,
   );
+}
+
+class RecordingVaultShuttle implements VaultShuttle {
+  int purgeCalls = 0;
+
+  @override
+  Future<List<VaultItem>> listVaultItems() async => const [];
+
+  @override
+  Future<void> purgeStagedPlaintext() async {
+    purgeCalls += 1;
+  }
+
+  @override
+  Future<void> shareToIsolatedApp({
+    required VaultItem item,
+    required String packageName,
+  }) async {}
 }
 
 class CountingSettingsStorage implements SettingsStorage {
@@ -551,12 +570,14 @@ void main() {
     (tester) async {
       final lock = LockController();
       final repository = BoundaryVaultRepository();
+      final shuttle = RecordingVaultShuttle();
       await tester.pumpWidget(
         PrivateVaultApp(
           lockController: lock,
           unlockService: FakeUnlockService(),
           vaultRepository: repository,
           mediaService: boundaryMedia(repository),
+          vaultShuttle: shuttle,
         ),
       );
 
@@ -570,6 +591,7 @@ void main() {
       await tester.pumpAndSettle();
       expect(find.text('Calculator'), findsOneWidget);
       expect(find.text('Secret preview text'), findsNothing);
+      expect(shuttle.purgeCalls, 1);
 
       lock.unlock();
       await tester.pumpAndSettle();

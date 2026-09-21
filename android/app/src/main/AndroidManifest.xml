@@ -104,6 +104,12 @@
             android:exported="false"
             android:grantUriPermissions="true" />
 
+        <provider
+            android:name=".VaultShuttleProvider"
+            android:authorities="${applicationId}.vault_shuttle"
+            android:exported="false"
+            android:grantUriPermissions="true" />
+
         <activity-alias
             android:name=".CalculatorAlias"
             android:targetActivity=".MainActivity"

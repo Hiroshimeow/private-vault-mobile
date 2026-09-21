@@ -1,15 +1,18 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:private_vault_mobile/features/apps/vault_shuttle_service.dart';
 import 'package:private_vault_mobile/features/apps/work_profile_client.dart';
 import 'package:private_vault_mobile/features/apps/work_profile_models.dart';
+import 'package:private_vault_mobile/features/vault/vault_repository.dart';
 
 enum _AppScope { personal, isolated }
 
 class WorkProfileHome extends StatefulWidget {
-  const WorkProfileHome({super.key, required this.client});
+  const WorkProfileHome({super.key, required this.client, this.vaultShuttle});
 
   final WorkProfileClient client;
+  final VaultShuttle? vaultShuttle;
 
   @override
   State<WorkProfileHome> createState() => _WorkProfileHomeState();
@@ -64,6 +67,94 @@ class _WorkProfileHomeState extends State<WorkProfileHome> {
       _message = result.message ?? 'Work-profile provisioning was not allowed.';
     });
   }
+
+  Future<void> _shareVaultFile(ManagedAppState app) async {
+    final shuttle = widget.vaultShuttle;
+    if (shuttle == null) return;
+
+    List<VaultItem> items;
+    try {
+      items = await shuttle.listVaultItems();
+    } on Object catch (error) {
+      if (!mounted) return;
+      setState(() => _message = 'Unable to read Vault items: $error');
+      return;
+    }
+    if (!mounted) return;
+
+    if (items.isEmpty) {
+      setState(() => _message = 'Vault is empty.');
+      return;
+    }
+
+    final selected = await showModalBottomSheet<VaultItem>(
+      context: context,
+      showDragHandle: true,
+      builder: (sheetContext) => SafeArea(
+        child: ListView(
+          shrinkWrap: true,
+          padding: const EdgeInsets.fromLTRB(16, 0, 16, 20),
+          children: [
+            Text(
+              'Share from Vault',
+              style: Theme.of(sheetContext).textTheme.titleLarge,
+            ),
+            const SizedBox(height: 8),
+            const Text(
+              'A temporary read-only copy is created in app-private cache and '
+              'removed on lock or timeout.',
+            ),
+            const SizedBox(height: 12),
+            for (final item in items)
+              ListTile(
+                key: ValueKey('vault-shuttle-${item.id}'),
+                leading: Icon(_vaultIcon(item.kind)),
+                title: Text(_vaultKindLabel(item.kind)),
+                subtitle: Text(_dateLabel(item.createdAt)),
+                onTap: () => Navigator.of(sheetContext).pop(item),
+              ),
+          ],
+        ),
+      ),
+    );
+    if (selected == null || !mounted) return;
+
+    setState(() => _message = 'Opening Vault item in ${app.label}…');
+    try {
+      await shuttle.shareToIsolatedApp(
+        item: selected,
+        packageName: app.packageName,
+      );
+      if (!mounted) return;
+      setState(() => _message = 'Vault item shared with ${app.label}.');
+    } on Object catch (error) {
+      if (!mounted) return;
+      setState(() => _message = 'Unable to share Vault item: $error');
+    }
+  }
+
+  String _dateLabel(DateTime value) {
+    final local = value.toLocal();
+    String two(int number) => number.toString().padLeft(2, '0');
+    return '${local.year}-${two(local.month)}-${two(local.day)} '
+        '${two(local.hour)}:${two(local.minute)}';
+  }
+
+  String _vaultKindLabel(VaultItemKind kind) => switch (kind) {
+    VaultItemKind.note => 'Protected note',
+    VaultItemKind.image => 'Image',
+    VaultItemKind.video => 'Video',
+    VaultItemKind.document => 'Document',
+    VaultItemKind.unknown => 'Vault item',
+  };
+
+  IconData _vaultIcon(VaultItemKind kind) => switch (kind) {
+    VaultItemKind.note => Icons.note_outlined,
+    VaultItemKind.image => Icons.image_outlined,
+    VaultItemKind.video => Icons.video_file_outlined,
+    VaultItemKind.document => Icons.description_outlined,
+    VaultItemKind.unknown => Icons.insert_drive_file_outlined,
+  };
 
   Future<void> _run(
     ManagedAppState app,
@@ -257,6 +348,9 @@ class _WorkProfileHomeState extends State<WorkProfileHome> {
                 scope: _scope,
                 client: widget.client,
                 onRun: _run,
+                onShareVault: widget.vaultShuttle == null
+                    ? null
+                    : _shareVaultFile,
               ),
           const SizedBox(height: 24),
           Align(
@@ -279,6 +373,7 @@ class _AppTile extends StatelessWidget {
     required this.scope,
     required this.client,
     required this.onRun,
+    this.onShareVault,
   });
 
   final ManagedAppState app;
@@ -289,6 +384,7 @@ class _AppTile extends StatelessWidget {
     Future<WorkProfileOperationResult> Function(),
   )
   onRun;
+  final Future<void> Function(ManagedAppState app)? onShareVault;
 
   @override
   Widget build(BuildContext context) {
@@ -318,7 +414,10 @@ class _AppTile extends StatelessWidget {
         trailing: isolated
             ? PopupMenuButton<String>(
                 onSelected: (value) {
-                  if (value == 'suspend') {
+                  if (value == 'share') {
+                    final share = onShareVault;
+                    if (share != null) unawaited(share(app));
+                  } else if (value == 'suspend') {
                     unawaited(
                       onRun(
                         app,
@@ -342,6 +441,11 @@ class _AppTile extends StatelessWidget {
                   }
                 },
                 itemBuilder: (_) => [
+                  if (onShareVault != null)
+                    const PopupMenuItem(
+                      value: 'share',
+                      child: Text('Share vault file'),
+                    ),
                   PopupMenuItem(
                     value: 'suspend',
                     child: Text(app.suspended ? 'Unfreeze' : 'Freeze'),

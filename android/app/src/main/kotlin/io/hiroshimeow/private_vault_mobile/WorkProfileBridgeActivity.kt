@@ -3,6 +3,7 @@ package io.hiroshimeow.private_vault_mobile
 import android.app.Activity
 import android.app.PendingIntent
 import android.app.admin.DevicePolicyManager
+import android.content.ClipData
 import android.content.ComponentName
 import android.content.Intent
 import android.content.pm.ApplicationInfo
@@ -73,6 +74,7 @@ class WorkProfileBridgeActivity : Activity() {
         when (intent.action) {
             WorkProfileProtocol.ACTION_INSTALL_STATUS -> handleInstallerStatus(intent)
             WorkProfileProtocol.ACTION_UNINSTALL_STATUS -> handleUninstallStatus(intent)
+            else -> handleCommand(intent)
         }
     }
 
@@ -85,6 +87,7 @@ class WorkProfileBridgeActivity : Activity() {
             }
             WorkProfileProtocol.ACTION_CLONE -> clone(intent)
             WorkProfileProtocol.ACTION_LAUNCH -> launch(intent)
+            WorkProfileProtocol.ACTION_SHARE_VAULT_FILE -> shareVaultFile(intent)
             WorkProfileProtocol.ACTION_SUSPEND -> suspend(intent)
             WorkProfileProtocol.ACTION_HIDE -> hide(intent)
             WorkProfileProtocol.ACTION_UNINSTALL -> uninstall(intent)
@@ -347,6 +350,84 @@ class WorkProfileBridgeActivity : Activity() {
     private fun postFailure(code: NativeWorkProfileErrorCode, message: String?) {
         Handler(Looper.getMainLooper()).post {
             finishFailure(code, message)
+        }
+    }
+
+    private fun shareVaultFile(intent: Intent) {
+        val targetPackage =
+            intent.getStringExtra(WorkProfileProtocol.EXTRA_PACKAGE_NAME)
+                ?: return finishFailure(
+                    NativeWorkProfileErrorCode.PACKAGE_INELIGIBLE,
+                    "Missing package name.",
+                )
+        val uri =
+            intent.clipData?.takeIf { it.itemCount > 0 }?.getItemAt(0)?.uri
+                ?: return finishFailure(
+                    NativeWorkProfileErrorCode.PACKAGE_INELIGIBLE,
+                    "No vault file was supplied.",
+                )
+        val mimeType =
+            intent.getStringExtra(WorkProfileProtocol.EXTRA_MIME_TYPE)
+                ?.takeIf { it.isNotBlank() }
+                ?: "application/octet-stream"
+        val displayName =
+            intent.getStringExtra(WorkProfileProtocol.EXTRA_DISPLAY_NAME)
+                ?.takeIf { it.isNotBlank() }
+                ?: "vault-item"
+
+        try {
+            val hidden =
+                runCatching { dpm.isApplicationHidden(admin, targetPackage) }
+                    .getOrDefault(false)
+            if (hidden && !dpm.setApplicationHidden(admin, targetPackage, false)) {
+                finishFailure(
+                    NativeWorkProfileErrorCode.POLICY_DENIED,
+                    "Android refused to unhide this work-profile app.",
+                )
+                return
+            }
+
+            val failedToUnsuspend =
+                dpm.setPackagesSuspended(admin, arrayOf(targetPackage), false)
+            if (failedToUnsuspend.isNotEmpty()) {
+                finishFailure(
+                    NativeWorkProfileErrorCode.POLICY_DENIED,
+                    "Android refused to unfreeze this work-profile app.",
+                )
+                return
+            }
+
+            val clip = ClipData.newRawUri(displayName, uri)
+            val shareIntent =
+                Intent(Intent.ACTION_SEND)
+                    .setPackage(targetPackage)
+                    .setType(mimeType)
+                    .putExtra(Intent.EXTRA_STREAM, uri)
+                    .setClipData(clip)
+                    .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            val viewIntent =
+                Intent(Intent.ACTION_VIEW)
+                    .setPackage(targetPackage)
+                    .setDataAndType(uri, mimeType)
+                    .setClipData(clip)
+                    .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+
+            val targetIntent =
+                when {
+                    packageManager.queryIntentActivities(shareIntent, 0).isNotEmpty() -> shareIntent
+                    packageManager.queryIntentActivities(viewIntent, 0).isNotEmpty() -> viewIntent
+                    else -> null
+                }
+                    ?: return finishFailure(
+                        NativeWorkProfileErrorCode.PACKAGE_INELIGIBLE,
+                        "This isolated app cannot receive the selected vault file.",
+                    )
+
+            startActivity(targetIntent)
+            rememberManagedPackage(targetPackage)
+            finishSuccess()
+        } catch (error: Exception) {
+            finishFailure(NativeWorkProfileErrorCode.OEM_UNSUPPORTED, error.message)
         }
     }
 

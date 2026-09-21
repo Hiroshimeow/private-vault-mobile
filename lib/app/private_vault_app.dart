@@ -6,6 +6,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:private_vault_mobile/app/private_vault_theme.dart';
+import 'package:private_vault_mobile/features/apps/vault_shuttle_service.dart';
 import 'package:private_vault_mobile/features/apps/work_profile_client.dart';
 import 'package:private_vault_mobile/features/apps/work_profile_home.dart';
 import 'package:private_vault_mobile/features/auth/biometric_unlock.dart';
@@ -35,6 +36,7 @@ class PrivateVaultApp extends StatefulWidget {
     this.panicService,
     this.disguiseBridge,
     this.workProfileClient,
+    this.vaultShuttle,
     this.initialSettings = const AppSettings.defaults(),
     this.initialCover,
   });
@@ -48,6 +50,7 @@ class PrivateVaultApp extends StatefulWidget {
   final PanicSensorService? panicService;
   final PlatformDisguiseBridge? disguiseBridge;
   final WorkProfileClient? workProfileClient;
+  final VaultShuttle? vaultShuttle;
   final AppSettings initialSettings;
   final CoverKind? initialCover;
 
@@ -103,6 +106,10 @@ class _PrivateVaultAppState extends State<PrivateVaultApp>
   void _purgeSecretRoutes() {
     _secretMessengerKey.currentState?.clearSnackBars();
     _secretNavigatorKey.currentState?.popUntil((route) => route.isFirst);
+    final shuttle = widget.vaultShuttle;
+    if (shuttle != null) {
+      unawaited(shuttle.purgeStagedPlaintext());
+    }
   }
 
   @override
@@ -337,6 +344,7 @@ class _PrivateVaultAppState extends State<PrivateVaultApp>
             settings: _settings,
             disguiseBridge: widget.disguiseBridge,
             workProfileClient: widget.workProfileClient,
+            vaultShuttle: widget.vaultShuttle,
             onSettingsChanged: (next) {
               unawaited(_applySettings(next));
             },
@@ -389,6 +397,7 @@ class SecretWorkspace extends StatefulWidget {
     required this.onSettingsChanged,
     this.disguiseBridge,
     this.workProfileClient,
+    this.vaultShuttle,
     this.vaultRepository,
     this.mediaService,
   });
@@ -398,6 +407,7 @@ class SecretWorkspace extends StatefulWidget {
   final ValueChanged<AppSettings> onSettingsChanged;
   final PlatformDisguiseBridge? disguiseBridge;
   final WorkProfileClient? workProfileClient;
+  final VaultShuttle? vaultShuttle;
   final VaultRepository? vaultRepository;
   final MediaVaultService? mediaService;
 
@@ -434,6 +444,7 @@ class _SecretWorkspaceState extends State<SecretWorkspace> {
       return WorkProfileHome(
         key: const ValueKey('work-profile-home'),
         client: widget.workProfileClient!,
+        vaultShuttle: widget.vaultShuttle,
       );
     }
     final browserIndex = hasApps ? 2 : 1;

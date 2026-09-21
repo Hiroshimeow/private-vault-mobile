@@ -566,6 +566,32 @@ class WorkProfileHostApi {
     return pigeonVar_replyValue! as NativeOperationResult;
   }
 
+  Future<NativeOperationResult> shareVaultFileToWorkApp(
+    String packageName,
+    String stagedFileName,
+    String mimeType,
+    String displayName,
+  ) async {
+    final pigeonVar_channelName =
+        'dev.flutter.pigeon.private_vault_mobile.WorkProfileHostApi.shareVaultFileToWorkApp$pigeonVar_messageChannelSuffix';
+    final pigeonVar_channel = BasicMessageChannel<Object?>(
+      pigeonVar_channelName,
+      pigeonChannelCodec,
+      binaryMessenger: pigeonVar_binaryMessenger,
+    );
+    final Future<Object?> pigeonVar_sendFuture = pigeonVar_channel.send(
+      <Object?>[packageName, stagedFileName, mimeType, displayName],
+    );
+    final pigeonVar_replyList = await pigeonVar_sendFuture as List<Object?>?;
+
+    final Object? pigeonVar_replyValue = _extractReplyValueOrThrow(
+      pigeonVar_replyList,
+      pigeonVar_channelName,
+      isNullValid: false,
+    );
+    return pigeonVar_replyValue! as NativeOperationResult;
+  }
+
   Future<NativeOperationResult> setSuspended(
     String packageName,
     bool suspended,

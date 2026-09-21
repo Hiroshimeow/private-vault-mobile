@@ -34,6 +34,8 @@ internal object WorkProfileProtocol {
         "io.hiroshimeow.private_vault_mobile.action.CLONE"
     const val ACTION_LAUNCH =
         "io.hiroshimeow.private_vault_mobile.action.LAUNCH"
+    const val ACTION_SHARE_VAULT_FILE =
+        "io.hiroshimeow.private_vault_mobile.action.SHARE_VAULT_FILE"
     const val ACTION_SUSPEND =
         "io.hiroshimeow.private_vault_mobile.action.SUSPEND"
     const val ACTION_HIDE =
@@ -50,6 +52,8 @@ internal object WorkProfileProtocol {
     const val EXTRA_PACKAGE_NAME = "package_name"
     const val EXTRA_SYSTEM_APP = "system_app"
     const val EXTRA_BOOL_VALUE = "bool_value"
+    const val EXTRA_MIME_TYPE = "mime_type"
+    const val EXTRA_DISPLAY_NAME = "display_name"
     const val EXTRA_OK = "ok"
     const val EXTRA_ERROR_CODE = "error_code"
     const val EXTRA_MESSAGE = "message"
@@ -66,6 +70,7 @@ internal object WorkProfileProtocol {
         ACTION_GET_APP_STATE,
         ACTION_CLONE,
         ACTION_LAUNCH,
+        ACTION_SHARE_VAULT_FILE,
         ACTION_SUSPEND,
         ACTION_HIDE,
         ACTION_UNINSTALL,
@@ -440,6 +445,50 @@ class WorkProfileHostApiAdapter(
         )
     }
 
+    override fun shareVaultFileToWorkApp(
+        packageName: String,
+        stagedFileName: String,
+        mimeType: String,
+        displayName: String,
+        callback: (Result<NativeOperationResult>) -> Unit,
+    ) {
+        val root = File(context.cacheDir, VaultShuttleProvider.TRANSFER_DIR).canonicalFile
+        val staged = File(root, stagedFileName).canonicalFile
+        if (staged.parentFile != root || !staged.isFile) {
+            callback(
+                Result.success(
+                    NativeOperationResult(
+                        false,
+                        NativeWorkProfileErrorCode.UNAUTHORIZED,
+                        "Vault shuttle file is unavailable.",
+                    ),
+                ),
+            )
+            return
+        }
+
+        val uri = VaultShuttleProvider.uriFor(
+            context = context,
+            file = staged,
+            mimeType = mimeType,
+            displayName = displayName,
+        )
+        val intent =
+            bridgeIntent(WorkProfileProtocol.ACTION_SHARE_VAULT_FILE)
+                .putExtra(WorkProfileProtocol.EXTRA_PACKAGE_NAME, packageName)
+                .putExtra(WorkProfileProtocol.EXTRA_MIME_TYPE, mimeType)
+                .putExtra(WorkProfileProtocol.EXTRA_DISPLAY_NAME, displayName)
+                .setClipData(
+                    ClipData.newUri(
+                        context.contentResolver,
+                        displayName,
+                        uri,
+                    ),
+                )
+                .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        launchOperation(intent, callback)
+    }
+
     override fun setSuspended(
         packageName: String,
         suspended: Boolean,
@@ -494,7 +543,7 @@ class WorkProfileHostApiAdapter(
     ) {
         val requestCode = allocateRequestCode()
         WorkProfileResultRegistry.register(
-            requestCode = requestCode,
+            requestId = requestCode,
             timeoutMs = WorkProfileNativePolicy.bridgeTimeoutMs(intent.action),
             timeoutCode = WorkProfileNativePolicy.bridgeTimeoutError(intent.action),
         ) { resultCode, data ->
@@ -532,7 +581,7 @@ class WorkProfileHostApiAdapter(
     ) {
         val requestCode = allocateRequestCode()
         WorkProfileResultRegistry.register(
-            requestCode = requestCode,
+            requestId = requestCode,
             timeoutMs = WorkProfileNativePolicy.FAST_BRIDGE_TIMEOUT_MS,
             timeoutCode = NativeWorkProfileErrorCode.BRIDGE_TIMEOUT,
         ) { resultCode, data ->
@@ -575,7 +624,7 @@ class WorkProfileHostApiAdapter(
     ) {
         val requestCode = allocateRequestCode()
         WorkProfileResultRegistry.register(
-            requestCode = requestCode,
+            requestId = requestCode,
             timeoutMs = WorkProfileNativePolicy.FAST_BRIDGE_TIMEOUT_MS,
             timeoutCode = NativeWorkProfileErrorCode.BRIDGE_TIMEOUT,
         ) { resultCode, data ->

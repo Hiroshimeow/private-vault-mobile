@@ -1,8 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:private_vault_mobile/features/apps/vault_shuttle_service.dart';
 import 'package:private_vault_mobile/features/apps/work_profile_client.dart';
 import 'package:private_vault_mobile/features/apps/work_profile_home.dart';
 import 'package:private_vault_mobile/features/apps/work_profile_models.dart';
+import 'package:private_vault_mobile/features/vault/vault_repository.dart';
 
 class ProvisioningWorkProfileClient implements WorkProfileClient {
   bool provisioned = false;
@@ -47,6 +49,32 @@ class ProvisioningWorkProfileClient implements WorkProfileClient {
   @override
   Future<WorkProfileOperationResult> uninstall(String packageName) async =>
       const WorkProfileOperationResult.success();
+}
+
+class RecordingVaultShuttle implements VaultShuttle {
+  RecordingVaultShuttle(this.items);
+
+  final List<VaultItem> items;
+  int purgeCalls = 0;
+  String? sharedPackage;
+  VaultItem? sharedItem;
+
+  @override
+  Future<List<VaultItem>> listVaultItems() async => items;
+
+  @override
+  Future<void> purgeStagedPlaintext() async {
+    purgeCalls += 1;
+  }
+
+  @override
+  Future<void> shareToIsolatedApp({
+    required VaultItem item,
+    required String packageName,
+  }) async {
+    sharedItem = item;
+    sharedPackage = packageName;
+  }
 }
 
 class ReadyWorkProfileClient implements WorkProfileClient {
@@ -213,6 +241,44 @@ void main() {
     expect(find.text('Freeze'), findsOneWidget);
     expect(find.text('Hide'), findsOneWidget);
     expect(find.text('Uninstall'), findsOneWidget);
+  });
+
+  testWidgets('isolated app can receive a selected Vault item', (tester) async {
+    final client = ReadyWorkProfileClient();
+    final item = VaultItem(
+      id: 'vault-image',
+      kind: VaultItemKind.image,
+      createdAt: DateTime.utc(2026, 9, 21, 3, 0),
+    );
+    final shuttle = RecordingVaultShuttle([item]);
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: WorkProfileHome(client: client, vaultShuttle: shuttle),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('Isolated'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byType(PopupMenuButton<String>));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Share vault file'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Share from Vault'), findsOneWidget);
+    expect(find.text('Image'), findsOneWidget);
+
+    await tester.tap(find.byKey(const ValueKey('vault-shuttle-vault-image')));
+    await tester.pumpAndSettle();
+
+    expect(shuttle.sharedPackage, 'example.app');
+    expect(shuttle.sharedItem?.id, 'vault-image');
+    expect(
+      find.textContaining('Vault item shared with Example'),
+      findsOneWidget,
+    );
   });
 
   testWidgets('profile removal requires destructive confirmation', (

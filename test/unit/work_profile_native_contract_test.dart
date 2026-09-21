@@ -95,6 +95,33 @@ void main() {
     },
   );
 
+  test('vault shuttle is read-only and forwarded into isolated apps', () async {
+    final manifest = await File('android/app/src/main/AndroidManifest.xml')
+        .readAsString();
+    final adapter = await File(
+      'android/app/src/main/kotlin/io/hiroshimeow/private_vault_mobile/WorkProfileHostApiAdapter.kt',
+    ).readAsString();
+    final bridge = await File(
+      'android/app/src/main/kotlin/io/hiroshimeow/private_vault_mobile/WorkProfileBridgeActivity.kt',
+    ).readAsString();
+    final providerFile = File(
+      'android/app/src/main/kotlin/io/hiroshimeow/private_vault_mobile/VaultShuttleProvider.kt',
+    );
+
+    expect(await providerFile.exists(), isTrue);
+    final provider = await providerFile.readAsString();
+    expect(manifest, contains('.VaultShuttleProvider'));
+    expect(manifest, contains(r'${applicationId}.vault_shuttle'));
+    expect(provider, contains('TRANSFER_DIR = "vault-shuttle"'));
+    expect(provider, contains('MODE_READ_ONLY'));
+    expect(provider, isNot(contains('MODE_WRITE')));
+    expect(adapter, contains('ACTION_SHARE_VAULT_FILE'));
+    expect(adapter, contains('FLAG_GRANT_READ_URI_PERMISSION'));
+    expect(bridge, contains('Intent.ACTION_SEND'));
+    expect(bridge, contains('Intent.EXTRA_STREAM'));
+    expect(bridge, contains('setPackage(targetPackage)'));
+  });
+
   test('package visibility remains narrow', () async {
     final manifest = await File('android/app/src/main/AndroidManifest.xml')
         .readAsString();

@@ -95,6 +95,13 @@ abstract class WorkProfileHostApi {
   @asyncCallback
   NativeOperationResult launchWorkApp(String packageName);
   @asyncCallback
+  NativeOperationResult shareVaultFileToWorkApp(
+    String packageName,
+    String stagedFileName,
+    String mimeType,
+    String displayName,
+  );
+  @asyncCallback
   NativeOperationResult setSuspended(String packageName, bool suspended);
   @asyncCallback
   NativeOperationResult setHidden(String packageName, bool hidden);

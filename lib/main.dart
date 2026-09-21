@@ -6,6 +6,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:private_vault_mobile/app/private_vault_app.dart';
 import 'package:private_vault_mobile/core/crypto/vault_crypto.dart';
 import 'package:private_vault_mobile/core/storage/secret_store.dart';
+import 'package:private_vault_mobile/features/apps/vault_shuttle_service.dart';
 import 'package:private_vault_mobile/features/apps/work_profile_client.dart';
 import 'package:private_vault_mobile/features/auth/biometric_unlock.dart';
 import 'package:private_vault_mobile/features/auth/lock_controller.dart';
@@ -42,6 +43,16 @@ Future<void> main() async {
     settings: settings,
     samples: PanicSensorService.deviceSamples(),
   )..start();
+  final vaultShuttle = Platform.isAndroid
+      ? VaultShuttleService(
+          repository: repository,
+          bridge: PigeonVaultShuttleBridge(),
+          tempDirectory: getTemporaryDirectory,
+        )
+      : null;
+  if (vaultShuttle != null) {
+    await vaultShuttle.purgeStagedPlaintext();
+  }
 
   runApp(
     PrivateVaultApp(
@@ -56,6 +67,7 @@ Future<void> main() async {
       workProfileClient: Platform.isAndroid
           ? PigeonWorkProfileClient()
           : const UnavailableWorkProfileClient(),
+      vaultShuttle: vaultShuttle,
       initialSettings: settings,
     ),
   );

@@ -483,6 +483,7 @@ interface WorkProfileHostApi {
   fun getAppState(packageName: String, callback: (Result<NativeManagedAppState?>) -> Unit)
   fun cloneToWorkProfile(packageName: String, callback: (Result<NativeOperationResult>) -> Unit)
   fun launchWorkApp(packageName: String, callback: (Result<NativeOperationResult>) -> Unit)
+  fun shareVaultFileToWorkApp(packageName: String, stagedFileName: String, mimeType: String, displayName: String, callback: (Result<NativeOperationResult>) -> Unit)
   fun setSuspended(packageName: String, suspended: Boolean, callback: (Result<NativeOperationResult>) -> Unit)
   fun setHidden(packageName: String, hidden: Boolean, callback: (Result<NativeOperationResult>) -> Unit)
   fun uninstallWorkApp(packageName: String, callback: (Result<NativeOperationResult>) -> Unit)
@@ -625,6 +626,29 @@ interface WorkProfileHostApi {
             val args = message as List<Any?>
             val packageNameArg = args[0] as String
             api.launchWorkApp(packageNameArg) { result: Result<NativeOperationResult> ->
+              val error = result.exceptionOrNull()
+              if (error != null) {
+                reply.reply(WorkProfileApiPigeonUtils.wrapError(error))
+              } else {
+                val data = result.getOrNull()
+                reply.reply(WorkProfileApiPigeonUtils.wrapResult(data))
+              }
+            }
+          }
+        } else {
+          channel.setMessageHandler(null)
+        }
+      }
+      run {
+        val channel = BasicMessageChannel<Any?>(binaryMessenger, "dev.flutter.pigeon.private_vault_mobile.WorkProfileHostApi.shareVaultFileToWorkApp$separatedMessageChannelSuffix", codec)
+        if (api != null) {
+          channel.setMessageHandler { message, reply ->
+            val args = message as List<Any?>
+            val packageNameArg = args[0] as String
+            val stagedFileNameArg = args[1] as String
+            val mimeTypeArg = args[2] as String
+            val displayNameArg = args[3] as String
+            api.shareVaultFileToWorkApp(packageNameArg, stagedFileNameArg, mimeTypeArg, displayNameArg) { result: Result<NativeOperationResult> ->
               val error = result.exceptionOrNull()
               if (error != null) {
                 reply.reply(WorkProfileApiPigeonUtils.wrapError(error))
