@@ -15,9 +15,13 @@ class FakeBiometricUnlock implements BiometricUnlock {
 
   final bool available;
   final bool accepted;
+  int authenticateCalls = 0;
 
   @override
-  Future<bool> authenticate() async => accepted;
+  Future<bool> authenticate() async {
+    authenticateCalls += 1;
+    return accepted;
+  }
 
   @override
   Future<bool> isAvailable() async => available;
@@ -98,13 +102,16 @@ class CountingSettingsStorage implements SettingsStorage {
   }
 }
 
-class FakeUnlockService implements UnlockService {
+class FakeUnlockService implements UnlockService, PinLengthAwareUnlockService {
   FakeUnlockService({this.pin = '482951'});
 
   final String pin;
 
   @override
   Future<bool> verify(String candidate) async => candidate == pin;
+
+  @override
+  Future<int?> configuredPinLength() async => pin.length;
 
   @override
   Future<bool> isConfigured() async => true;
@@ -360,14 +367,93 @@ void main() {
     expect(find.text('Vault'), findsNothing);
   });
 
-  testWidgets('enabled biometric unlock can open secret workspace', (
+  testWidgets('calculator PIN silently triggers biometric and unlocks', (
     tester,
   ) async {
+    final biometric = FakeBiometricUnlock();
     await tester.pumpWidget(
       PrivateVaultApp(
         lockController: LockController(),
-        unlockService: FakeUnlockService(),
-        biometricUnlock: FakeBiometricUnlock(),
+        unlockService: FakeUnlockService(pin: '0000'),
+        biometricUnlock: biometric,
+        initialSettings: const AppSettings.defaults().copyWith(
+          biometricsEnabled: true,
+        ),
+      ),
+    );
+
+    for (var index = 0; index < 4; index++) {
+      await tester.tap(find.byKey(const Key('calculator-key-0')));
+    }
+    await tester.pump(const Duration(milliseconds: 250));
+    await tester.pumpAndSettle();
+
+    expect(biometric.authenticateCalls, 1);
+    expect(find.byTooltip('Lock now'), findsOneWidget);
+    expect(find.text('Enter PIN'), findsNothing);
+    expect(find.text('Use biometrics'), findsNothing);
+  });
+
+  testWidgets('wrong calculator PIN reveals nothing and skips biometric', (
+    tester,
+  ) async {
+    final biometric = FakeBiometricUnlock();
+    await tester.pumpWidget(
+      PrivateVaultApp(
+        lockController: LockController(),
+        unlockService: FakeUnlockService(pin: '0000'),
+        biometricUnlock: biometric,
+        initialSettings: const AppSettings.defaults().copyWith(
+          biometricsEnabled: true,
+        ),
+      ),
+    );
+
+    for (final digit in ['0', '0', '0', '1']) {
+      await tester.tap(find.byKey(Key('calculator-key-$digit')));
+    }
+    await tester.pump(const Duration(milliseconds: 250));
+    await tester.pumpAndSettle();
+
+    expect(biometric.authenticateCalls, 0);
+    expect(find.text('Calculator'), findsOneWidget);
+    expect(find.text('Enter PIN'), findsNothing);
+    expect(find.text('Vault'), findsNothing);
+  });
+
+  testWidgets('biometric rejection keeps concealed calculator locked', (
+    tester,
+  ) async {
+    final biometric = FakeBiometricUnlock(accepted: false);
+    await tester.pumpWidget(
+      PrivateVaultApp(
+        lockController: LockController(),
+        unlockService: FakeUnlockService(pin: '0000'),
+        biometricUnlock: biometric,
+        initialSettings: const AppSettings.defaults().copyWith(
+          biometricsEnabled: true,
+        ),
+      ),
+    );
+
+    for (var index = 0; index < 4; index++) {
+      await tester.tap(find.byKey(const Key('calculator-key-0')));
+    }
+    await tester.pump(const Duration(milliseconds: 250));
+    await tester.pumpAndSettle();
+
+    expect(biometric.authenticateCalls, 1);
+    expect(find.text('Calculator'), findsOneWidget);
+    expect(find.text('Vault'), findsNothing);
+  });
+
+  testWidgets('fallback unlock requires PIN before biometric', (tester) async {
+    final biometric = FakeBiometricUnlock();
+    await tester.pumpWidget(
+      PrivateVaultApp(
+        lockController: LockController(),
+        unlockService: FakeUnlockService(pin: '0000'),
+        biometricUnlock: biometric,
         initialSettings: const AppSettings.defaults().copyWith(
           biometricsEnabled: true,
         ),
@@ -376,9 +462,12 @@ void main() {
 
     await tester.longPress(find.byKey(const Key('cover-title')));
     await tester.pumpAndSettle();
-    await tester.tap(find.widgetWithText(OutlinedButton, 'Use biometrics'));
+    expect(find.text('Use biometrics'), findsNothing);
+    await tester.enterText(find.byKey(const Key('unlock-pin')), '0000');
+    await tester.tap(find.widgetWithText(FilledButton, 'Unlock'));
     await tester.pumpAndSettle();
 
+    expect(biometric.authenticateCalls, 1);
     expect(find.byTooltip('Lock now'), findsOneWidget);
   });
 

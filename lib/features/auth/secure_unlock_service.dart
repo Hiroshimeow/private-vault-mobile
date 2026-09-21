@@ -9,7 +9,12 @@ abstract interface class UnlockService {
   Future<bool> verify(String candidate);
 }
 
-class SecureUnlockService implements UnlockService {
+abstract interface class PinLengthAwareUnlockService {
+  Future<int?> configuredPinLength();
+}
+
+class SecureUnlockService
+    implements UnlockService, PinLengthAwareUnlockService {
   factory SecureUnlockService({
     required SecretStore store,
     int? testIterations,
@@ -29,6 +34,20 @@ class SecureUnlockService implements UnlockService {
   Future<bool> isConfigured() async => await _store.read(_verifierKey) != null;
 
   @override
+  Future<int?> configuredPinLength() async {
+    final encoded = await _store.read(_verifierKey);
+    if (encoded == null) return null;
+    try {
+      final decoded = jsonDecode(encoded);
+      if (decoded is! Map<String, dynamic>) return null;
+      final length = decoded['length'];
+      return length is int && length >= 4 && length <= 12 ? length : null;
+    } on Object {
+      return null;
+    }
+  }
+
+  @override
   Future<void> configure(String pin) async {
     if (!_isValidPin(pin)) {
       throw const InvalidPinException();
@@ -40,6 +59,7 @@ class SecureUnlockService implements UnlockService {
         'salt': verifier.salt,
         'hash': verifier.hash,
         'iterations': verifier.iterations,
+        'length': pin.length,
       }),
     );
   }
@@ -68,7 +88,7 @@ class SecureUnlockService implements UnlockService {
   }
 
   bool _isValidPin(String pin) =>
-      pin.length >= 6 && pin.length <= 12 && RegExp(r'^\d+$').hasMatch(pin);
+      pin.length >= 4 && pin.length <= 12 && RegExp(r'^\d+$').hasMatch(pin);
 }
 
 class InvalidPinException implements Exception {

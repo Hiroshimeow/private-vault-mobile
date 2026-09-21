@@ -1,4 +1,5 @@
-export '../features/auth/secure_unlock_service.dart' show UnlockService;
+export '../features/auth/secure_unlock_service.dart'
+    show PinLengthAwareUnlockService, UnlockService;
 
 import 'dart:async';
 
@@ -63,6 +64,9 @@ class _PrivateVaultAppState extends State<PrivateVaultApp>
   late final VoidCallback _confidentialityBoundary;
   late AppSettings _settings;
   late CoverKind _cover;
+  Timer? _hiddenUnlockDebounce;
+  Future<int?>? _pinLengthFuture;
+  bool _hiddenUnlockInFlight = false;
 
   @override
   void initState() {
@@ -91,6 +95,9 @@ class _PrivateVaultAppState extends State<PrivateVaultApp>
         _confidentialityBoundary,
       );
     }
+    if (!identical(oldWidget.unlockService, widget.unlockService)) {
+      _pinLengthFuture = null;
+    }
   }
 
   void _purgeSecretRoutes() {
@@ -116,6 +123,7 @@ class _PrivateVaultAppState extends State<PrivateVaultApp>
 
   @override
   void dispose() {
+    _hiddenUnlockDebounce?.cancel();
     WidgetsBinding.instance.removeObserver(this);
     widget.lockController.detachConfidentialityBoundary(
       _confidentialityBoundary,
@@ -125,13 +133,58 @@ class _PrivateVaultAppState extends State<PrivateVaultApp>
     super.dispose();
   }
 
+  Future<int?> _configuredPinLength() {
+    final service = widget.unlockService;
+    if (service is! PinLengthAwareUnlockService) {
+      return Future<int?>.value(null);
+    }
+    final lengthAware = service as PinLengthAwareUnlockService;
+    return _pinLengthFuture ??= lengthAware.configuredPinLength();
+  }
+
+  void _onCalculatorSecretDigits(String digits) {
+    _hiddenUnlockDebounce?.cancel();
+    if (digits.isEmpty || !widget.lockController.isLocked) return;
+    _hiddenUnlockDebounce = Timer(const Duration(milliseconds: 120), () {
+      unawaited(_attemptHiddenUnlock(digits));
+    });
+  }
+
+  Future<void> _attemptHiddenUnlock(String digits) async {
+    if (_hiddenUnlockInFlight || !widget.lockController.isLocked) return;
+
+    final configuredLength = await _configuredPinLength();
+    if (!mounted || !widget.lockController.isLocked) return;
+    final requiredLength = configuredLength ?? 6;
+    if (digits.length < requiredLength) return;
+    final candidate = configuredLength == null
+        ? digits
+        : digits.substring(digits.length - configuredLength);
+    if (candidate.length < 4 || candidate.length > 12) return;
+
+    _hiddenUnlockInFlight = true;
+    try {
+      if (!await widget.unlockService.verify(candidate)) return;
+      if (_settings.biometricsEnabled) {
+        final biometric = widget.biometricUnlock;
+        if (biometric == null || !await biometric.isAvailable()) return;
+        if (!await biometric.authenticate()) return;
+      }
+      if (mounted && widget.lockController.isLocked) {
+        widget.lockController.unlock();
+      }
+    } finally {
+      _hiddenUnlockInFlight = false;
+    }
+  }
+
   Future<void> _requestUnlock(BuildContext materialContext) async {
     final configured = await widget.unlockService.isConfigured();
     if (!mounted || !materialContext.mounted) return;
 
     var biometricAvailable = false;
     final biometric = widget.biometricUnlock;
-    if (configured && _settings.biometricsEnabled && biometric != null) {
+    if (_settings.biometricsEnabled && biometric != null) {
       biometricAvailable = await biometric.isAvailable();
       if (!mounted || !materialContext.mounted) return;
     }
@@ -157,28 +210,31 @@ class _PrivateVaultAppState extends State<PrivateVaultApp>
               } else {
                 try {
                   await widget.unlockService.configure(candidate);
+                  _pinLengthFuture = null;
                 } on Object {
                   if (!sheetContext.mounted) return;
                   setSheetState(
-                    () => error = 'Use 6–12 digits for the access PIN',
+                    () => error = 'Use 4–12 digits for the access PIN',
                   );
                   return;
                 }
               }
 
-              if (!sheetContext.mounted) return;
-              Navigator.of(sheetContext).pop();
-              widget.lockController.unlock();
-            }
-
-            Future<void> submitBiometric() async {
-              if (!biometricAvailable || biometric == null) return;
-              final accepted = await biometric.authenticate();
-              if (!sheetContext.mounted) return;
-              if (!accepted) {
-                setSheetState(() => error = 'Biometric unlock not accepted');
-                return;
+              if (_settings.biometricsEnabled) {
+                if (!biometricAvailable || biometric == null) {
+                  if (!sheetContext.mounted) return;
+                  setSheetState(() => error = 'Biometrics unavailable');
+                  return;
+                }
+                final biometricAccepted = await biometric.authenticate();
+                if (!sheetContext.mounted) return;
+                if (!biometricAccepted) {
+                  setSheetState(() => error = 'Biometric unlock not accepted');
+                  return;
+                }
               }
+
+              if (!sheetContext.mounted) return;
               Navigator.of(sheetContext).pop();
               widget.lockController.unlock();
             }
@@ -221,7 +277,7 @@ class _PrivateVaultAppState extends State<PrivateVaultApp>
                   Text(
                     configured
                         ? 'Unlock protected content with your access PIN.'
-                        : 'Create a 6–12 digit PIN for protected content.',
+                        : 'Create a 4–12 digit PIN for protected content.',
                     textAlign: TextAlign.center,
                     style: Theme.of(context).textTheme.bodyMedium,
                   ),
@@ -246,14 +302,6 @@ class _PrivateVaultAppState extends State<PrivateVaultApp>
                     onPressed: submit,
                     child: Text(configured ? 'Unlock' : 'Create PIN'),
                   ),
-                  if (biometricAvailable) ...[
-                    const SizedBox(height: 8),
-                    OutlinedButton.icon(
-                      onPressed: submitBiometric,
-                      icon: const Icon(Icons.fingerprint),
-                      label: const Text('Use biometrics'),
-                    ),
-                  ],
                 ],
               ),
             );
@@ -302,6 +350,7 @@ class _PrivateVaultAppState extends State<PrivateVaultApp>
     return switch (_cover) {
       CoverKind.calculator => CalculatorCover(
         onUnlockRequested: () => _requestUnlock(materialContext),
+        onSecretDigitsChanged: _onCalculatorSecretDigits,
       ),
       CoverKind.notes => NotesCover(
         onUnlockRequested: () => _requestUnlock(materialContext),

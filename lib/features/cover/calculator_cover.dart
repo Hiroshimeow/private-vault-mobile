@@ -1,9 +1,16 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 class CalculatorCover extends StatefulWidget {
-  const CalculatorCover({super.key, required this.onUnlockRequested});
+  const CalculatorCover({
+    super.key,
+    required this.onUnlockRequested,
+    this.onSecretDigitsChanged,
+  });
 
   final VoidCallback onUnlockRequested;
+  final ValueChanged<String>? onSecretDigitsChanged;
 
   @override
   State<CalculatorCover> createState() => _CalculatorCoverState();
@@ -14,6 +21,14 @@ class _CalculatorCoverState extends State<CalculatorCover> {
   double? _left;
   String? _operator;
   bool _replace = true;
+  String _secretDigits = '';
+  Timer? _secretResetTimer;
+
+  @override
+  void dispose() {
+    _secretResetTimer?.cancel();
+    super.dispose();
+  }
 
   void _digit(String digit) {
     setState(() {
@@ -24,9 +39,27 @@ class _CalculatorCoverState extends State<CalculatorCover> {
         _display += digit;
       }
     });
+    _secretDigits = '$_secretDigits$digit';
+    if (_secretDigits.length > 12) {
+      _secretDigits = _secretDigits.substring(_secretDigits.length - 12);
+    }
+    widget.onSecretDigitsChanged?.call(_secretDigits);
+    _secretResetTimer?.cancel();
+    _secretResetTimer = Timer(const Duration(milliseconds: 700), () {
+      _secretDigits = '';
+      widget.onSecretDigitsChanged?.call('');
+    });
+  }
+
+  void _resetSecretDigits() {
+    _secretResetTimer?.cancel();
+    if (_secretDigits.isEmpty) return;
+    _secretDigits = '';
+    widget.onSecretDigitsChanged?.call('');
   }
 
   void _operation(String operator) {
+    _resetSecretDigits();
     setState(() {
       _applyPending();
       _left = double.tryParse(_display);
@@ -36,6 +69,7 @@ class _CalculatorCoverState extends State<CalculatorCover> {
   }
 
   void _equals() {
+    _resetSecretDigits();
     setState(() {
       _applyPending();
       _operator = null;
@@ -69,6 +103,7 @@ class _CalculatorCoverState extends State<CalculatorCover> {
   }
 
   void _clear() {
+    _resetSecretDigits();
     setState(() {
       _display = '0';
       _left = null;

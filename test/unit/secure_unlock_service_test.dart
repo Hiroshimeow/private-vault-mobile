@@ -30,6 +30,20 @@ void main() {
     expect(store.values.values.join(), isNot(contains('482951')));
   });
 
+  test(
+    'four digit PIN is supported for concealed PIN plus biometric flow',
+    () async {
+      final store = MemorySecretStore();
+      final service = SecureUnlockService(store: store, testIterations: 1000);
+
+      await service.configure('0000');
+
+      expect(await service.verify('0000'), isTrue);
+      expect(await service.verify('0001'), isFalse);
+      expect(store.values.values.join(), isNot(contains('0000')));
+    },
+  );
+
   test('unconfigured service rejects verification', () async {
     final service = SecureUnlockService(
       store: MemorySecretStore(),
