@@ -314,27 +314,36 @@ class _VaultHomeState extends State<VaultHome> {
                     ),
                   )
                 : Semantics(
-                    key: const ValueKey('vault-list'),
-                    label: 'Protected item list',
+                    key: const ValueKey('vault-grid'),
+                    label: 'Protected item gallery',
                     container: true,
-                    child: ListView.separated(
-                      padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
-                      itemCount: _items.length,
-                      separatorBuilder: (_, _) => const SizedBox(height: 8),
-                      itemBuilder: (context, index) {
-                        final item = _items[index];
-                        return Card(
-                          child: ListTile(
-                            onTap: () => _open(item),
-                            leading: Icon(_iconFor(item.kind)),
-                            title: Text(_labelFor(item.kind)),
-                            subtitle: item.kind == VaultItemKind.unknown
-                                ? const Text(
-                                    'Open once to restore authenticated metadata',
-                                  )
-                                : Text(_shortTimestamp(item.createdAt)),
-                            trailing: const Icon(Icons.chevron_right),
-                          ),
+                    child: LayoutBuilder(
+                      builder: (context, constraints) {
+                        final columns = constraints.maxWidth >= 900
+                            ? 4
+                            : constraints.maxWidth >= 600
+                            ? 3
+                            : 2;
+                        return GridView.builder(
+                          padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
+                          gridDelegate:
+                              SliverGridDelegateWithFixedCrossAxisCount(
+                                crossAxisCount: columns,
+                                crossAxisSpacing: 10,
+                                mainAxisSpacing: 10,
+                                childAspectRatio: 0.9,
+                              ),
+                          itemCount: _items.length,
+                          itemBuilder: (context, index) {
+                            final item = _items[index];
+                            return _VaultGridTile(
+                              item: item,
+                              icon: _iconFor(item.kind),
+                              label: _labelFor(item.kind),
+                              timestamp: _shortTimestamp(item.createdAt),
+                              onTap: () => _open(item),
+                            );
+                          },
                         );
                       },
                     ),
@@ -366,6 +375,64 @@ class _VaultHomeState extends State<VaultHome> {
     String two(int number) => number.toString().padLeft(2, '0');
     return '${local.year}-${two(local.month)}-${two(local.day)} '
         '${two(local.hour)}:${two(local.minute)}';
+  }
+}
+
+class _VaultGridTile extends StatelessWidget {
+  const _VaultGridTile({
+    required this.item,
+    required this.icon,
+    required this.label,
+    required this.timestamp,
+    required this.onTap,
+  });
+
+  final VaultItem item;
+  final IconData icon;
+  final String label;
+  final String timestamp;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = Theme.of(context).colorScheme;
+    return Card(
+      clipBehavior: Clip.antiAlias,
+      child: InkWell(
+        onTap: onTap,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Expanded(
+              child: ColoredBox(
+                color: colors.surfaceContainerHighest,
+                child: Center(
+                  child: Icon(icon, size: 42, color: colors.onSurfaceVariant),
+                ),
+              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(12, 10, 12, 4),
+              child: Text(
+                label,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: Theme.of(context).textTheme.titleSmall,
+              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(12, 0, 12, 10),
+              child: Text(
+                item.kind == VaultItemKind.unknown ? 'Legacy item' : timestamp,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: Theme.of(context).textTheme.bodySmall,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
   }
 }
 
