@@ -7,7 +7,7 @@ import 'package:private_vault_mobile/features/vault/vault_home.dart';
 import 'package:private_vault_mobile/features/vault/vault_repository.dart';
 
 class FakeVaultRepository implements VaultRepository {
-  FakeVaultRepository() {
+  FakeVaultRepository({this.failList = false}) {
     final item = VaultItem(
       id: 'fixture-item',
       kind: VaultItemKind.document,
@@ -19,6 +19,7 @@ class FakeVaultRepository implements VaultRepository {
 
   final items = <VaultItem>[];
   final bytesById = <String, Uint8List>{};
+  final bool failList;
   VaultItemKind? lastAddedKind;
   Uint8List? lastAddedBytes;
 
@@ -46,7 +47,10 @@ class FakeVaultRepository implements VaultRepository {
   }
 
   @override
-  Future<List<VaultItem>> list() async => List.unmodifiable(items);
+  Future<List<VaultItem>> list() async {
+    if (failList) throw StateError('synthetic list failure');
+    return List.unmodifiable(items);
+  }
 
   @override
   Future<Uint8List> readBytes(String id) async => bytesById[id]!;
@@ -202,5 +206,34 @@ void main() {
 
     expect(find.text('Export this item?'), findsOneWidget);
     expect(exports, 0);
+  });
+
+  testWidgets('list failure shows only the load error state', (tester) async {
+    final repository = FakeVaultRepository(failList: true);
+    final media = MediaVaultService(
+      repository: repository,
+      pickImport: () async => null,
+      capturePhoto: () async => null,
+      saveExport: (_, _) async => true,
+    );
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: VaultHome(
+            repository: repository,
+            media: media,
+            confirmExport: true,
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('Protected items could not be loaded.'), findsOneWidget);
+    expect(
+      find.text('No protected items yet. Import, capture, or create a note.'),
+      findsNothing,
+    );
   });
 }

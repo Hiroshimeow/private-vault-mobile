@@ -5,6 +5,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:private_vault_mobile/app/private_vault_app.dart';
 import 'package:private_vault_mobile/features/auth/biometric_unlock.dart';
 import 'package:private_vault_mobile/features/auth/lock_controller.dart';
+import 'package:private_vault_mobile/features/cover/calculator_cover.dart';
 import 'package:private_vault_mobile/features/media/media_vault_service.dart';
 import 'package:private_vault_mobile/features/settings/app_settings.dart';
 import 'package:private_vault_mobile/features/vault/vault_repository.dart';
@@ -41,6 +42,7 @@ class BoundaryVaultRepository implements VaultRepository {
 
   final items = <VaultItem>[];
   final bytesById = <String, Uint8List>{};
+  int listCalls = 0;
 
   @override
   Future<VaultItem> addBytes(
@@ -64,7 +66,10 @@ class BoundaryVaultRepository implements VaultRepository {
   }
 
   @override
-  Future<List<VaultItem>> list() async => List.unmodifiable(items);
+  Future<List<VaultItem>> list() async {
+    listCalls += 1;
+    return List.unmodifiable(items);
+  }
 
   @override
   Future<Uint8List> readBytes(String id) async => bytesById[id]!;
@@ -77,6 +82,20 @@ MediaVaultService boundaryMedia(BoundaryVaultRepository repository) {
     capturePhoto: () async => null,
     saveExport: (_, _) async => true,
   );
+}
+
+class CountingSettingsStorage implements SettingsStorage {
+  int writes = 0;
+  String? encoded;
+
+  @override
+  Future<String?> read() async => encoded;
+
+  @override
+  Future<void> write(String value) async {
+    writes += 1;
+    encoded = value;
+  }
 }
 
 class FakeUnlockService implements UnlockService {
@@ -94,7 +113,192 @@ class FakeUnlockService implements UnlockService {
   Future<void> configure(String pin) async {}
 }
 
+Future<void> pumpCalculatorCover(
+  WidgetTester tester, {
+  required Size size,
+  double textScale = 1,
+}) async {
+  await tester.binding.setSurfaceSize(size);
+  addTearDown(() => tester.binding.setSurfaceSize(null));
+  await tester.pumpWidget(
+    MediaQuery(
+      data: MediaQueryData(
+        size: size,
+        textScaler: TextScaler.linear(textScale),
+      ),
+      child: MaterialApp(home: CalculatorCover(onUnlockRequested: () {})),
+    ),
+  );
+  await tester.pump();
+}
+
 void main() {
+  for (final width in <double>[360, 390, 412]) {
+    testWidgets('calculator keypad stays aligned and reachable at $width px', (
+      tester,
+    ) async {
+      await pumpCalculatorCover(tester, size: Size(width, 800));
+
+      const labels = <String>[
+        '7',
+        '8',
+        '9',
+        '÷',
+        '4',
+        '5',
+        '6',
+        '×',
+        '1',
+        '2',
+        '3',
+        '-',
+        'C',
+        '0',
+        '=',
+        '+',
+      ];
+      final rects = <Rect>[];
+      for (final label in labels) {
+        final finder = find.byKey(Key('calculator-key-$label'));
+        expect(finder, findsOneWidget);
+        final rect = tester.getRect(finder);
+        expect(rect.width, greaterThanOrEqualTo(48));
+        expect(rect.height, greaterThanOrEqualTo(48));
+        rects.add(rect);
+      }
+      for (var row = 0; row < 4; row++) {
+        final rowRects = rects.skip(row * 4).take(4).toList();
+        expect(rowRects.map((rect) => rect.center.dy).toSet().length, 1);
+      }
+      for (var column = 0; column < 4; column++) {
+        final centers = <double>[
+          for (var row = 0; row < 4; row++) rects[(row * 4) + column].center.dx,
+        ];
+        expect(centers.toSet().length, 1);
+      }
+      expect(tester.takeException(), isNull);
+    });
+  }
+
+  testWidgets('calculator remains contained at 360 px and 1.3 text scale', (
+    tester,
+  ) async {
+    await pumpCalculatorCover(
+      tester,
+      size: const Size(360, 800),
+      textScale: 1.3,
+    );
+
+    final displayRect = tester.getRect(
+      find.byKey(const Key('calculator-display')),
+    );
+    expect(displayRect.left, greaterThanOrEqualTo(0));
+    expect(displayRect.right, lessThanOrEqualTo(360));
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('calculator cover exposes no private workspace terminology', (
+    tester,
+  ) async {
+    await pumpCalculatorCover(tester, size: const Size(390, 800));
+
+    for (final forbidden in <String>[
+      'Vault',
+      'Private',
+      'Browser',
+      'Settings',
+    ]) {
+      expect(find.textContaining(forbidden), findsNothing);
+    }
+  });
+
+  testWidgets('calculator remains usable in a compact landscape viewport', (
+    tester,
+  ) async {
+    await pumpCalculatorCover(tester, size: const Size(800, 360));
+
+    for (final label in <String>[
+      '7',
+      '8',
+      '9',
+      '÷',
+      '4',
+      '5',
+      '6',
+      '×',
+      '1',
+      '2',
+      '3',
+      '-',
+      'C',
+      '0',
+      '=',
+      '+',
+    ]) {
+      final rect = tester.getRect(
+        find.byKey(Key(<String>['calculator-key-', label].join())),
+      );
+      expect(rect.width, greaterThanOrEqualTo(48));
+      expect(rect.height, greaterThanOrEqualTo(48));
+      expect(rect.bottom, lessThanOrEqualTo(360));
+    }
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('calculator display scrolls long values instead of clipping', (
+    tester,
+  ) async {
+    await pumpCalculatorCover(
+      tester,
+      size: const Size(360, 800),
+      textScale: 1.3,
+    );
+
+    for (var index = 0; index < 14; index++) {
+      await tester.tap(find.byKey(const Key('calculator-key-9')));
+    }
+    await tester.pump();
+
+    final viewport = tester.getRect(
+      find.byKey(const Key('calculator-display-viewport')),
+    );
+    expect(viewport.left, greaterThanOrEqualTo(0));
+    expect(viewport.right, lessThanOrEqualTo(360));
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('calculator operators expose accessible semantic labels', (
+    tester,
+  ) async {
+    await pumpCalculatorCover(tester, size: const Size(390, 800));
+
+    expect(find.bySemanticsLabel('Divide'), findsOneWidget);
+    expect(find.bySemanticsLabel('Multiply'), findsOneWidget);
+    expect(find.bySemanticsLabel('Subtract'), findsOneWidget);
+    expect(find.bySemanticsLabel('Add'), findsOneWidget);
+    expect(find.bySemanticsLabel('Equals'), findsOneWidget);
+    expect(find.bySemanticsLabel('Clear'), findsOneWidget);
+  });
+
+  testWidgets('calculator key roles use distinct themed surfaces', (
+    tester,
+  ) async {
+    await pumpCalculatorCover(tester, size: const Size(390, 800));
+
+    Color? backgroundFor(String label) {
+      final button = tester.widget<FilledButton>(
+        find.byKey(Key(<String>['calculator-key-', label].join())),
+      );
+      return button.style?.backgroundColor?.resolve(<WidgetState>{});
+    }
+
+    final number = backgroundFor('7');
+    final operator = backgroundFor('+');
+    final destructive = backgroundFor('C');
+    final equals = backgroundFor('=');
+    expect({number, operator, destructive, equals}.length, 4);
+  });
+
   testWidgets(
     'locked launch renders calculator cover and no secret workspace text',
     (tester) async {
@@ -176,6 +380,81 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.byTooltip('Lock now'), findsOneWidget);
+  });
+
+  testWidgets('visited Vault state survives tab switches', (tester) async {
+    final lock = LockController();
+    final repository = BoundaryVaultRepository();
+    await tester.pumpWidget(
+      PrivateVaultApp(
+        lockController: lock,
+        unlockService: FakeUnlockService(),
+        vaultRepository: repository,
+        mediaService: boundaryMedia(repository),
+      ),
+    );
+
+    lock.unlock();
+    await tester.pumpAndSettle();
+    expect(repository.listCalls, 1);
+
+    await tester.tap(find.text('Settings').last);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Vault').last);
+    await tester.pumpAndSettle();
+
+    expect(repository.listCalls, 1);
+  });
+
+  testWidgets('visited Settings state survives tab switches', (tester) async {
+    final lock = LockController();
+    await tester.pumpWidget(
+      PrivateVaultApp(lockController: lock, unlockService: FakeUnlockService()),
+    );
+
+    lock.unlock();
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Settings').last);
+    await tester.pumpAndSettle();
+    final settingsElement = tester.element(
+      find.byKey(const ValueKey('settings-home')),
+    );
+
+    await tester.tap(find.text('Vault').last);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Settings').last);
+    await tester.pumpAndSettle();
+
+    expect(
+      identical(
+        settingsElement,
+        tester.element(find.byKey(const ValueKey('settings-home'))),
+      ),
+      isTrue,
+    );
+  });
+
+  testWidgets('settings slider persists once when drag ends', (tester) async {
+    final lock = LockController();
+    final storage = CountingSettingsStorage();
+    await tester.pumpWidget(
+      PrivateVaultApp(
+        lockController: lock,
+        unlockService: FakeUnlockService(),
+        settingsStore: AppSettingsStore(storage),
+      ),
+    );
+
+    lock.unlock();
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Settings').last);
+    await tester.pumpAndSettle();
+
+    final slider = find.byType(Slider).first;
+    await tester.drag(slider, const Offset(120, 0));
+    await tester.pumpAndSettle();
+
+    expect(storage.writes, 1);
   });
 
   testWidgets(

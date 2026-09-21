@@ -4,8 +4,9 @@ import 'package:flutter_test/flutter_test.dart';
 
 void main() {
   test('hosted emulator workflow runs the RC integration test', () async {
-    final workflow = await File('.github/workflows/android-integration.yml')
-        .readAsString();
+    final workflow = (await File(
+      '.github/workflows/android-integration.yml',
+    ).readAsString()).replaceAll('\r\n', '\n');
     expect(workflow, contains('reactivecircus/android-emulator-runner@v2'));
     expect(workflow, contains('integration_test/private_vault_rc_test.dart'));
     expect(workflow, contains('flutter-version: 3.47.4'));
@@ -21,8 +22,9 @@ void main() {
   test(
     'RC release workflow is prerelease-only and checks source version',
     () async {
-      final workflow = await File('.github/workflows/release-rc.yml')
-          .readAsString();
+      final workflow = (await File(
+        '.github/workflows/release-rc.yml',
+      ).readAsString()).replaceAll('\r\n', '\n');
       expect(workflow, contains('v*.*.*-rc.*'));
       expect(workflow, contains('dart run tool/check_release_version.dart'));
       expect(workflow, contains('prerelease: true'));
