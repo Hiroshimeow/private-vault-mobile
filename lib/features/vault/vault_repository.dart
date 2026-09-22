@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
@@ -88,6 +89,13 @@ class VaultScanResult {
   int get unreadableCount =>
       corruptCount + unsupportedCount + foreignCount + storageFailureCount;
   bool get hasProblems => unreadableCount > 0;
+}
+
+abstract interface class StreamingVaultRepository implements VaultRepository {
+  Future<VaultItem> addStream(
+    Stream<List<int>> bytes, {
+    required VaultItemKind kind,
+  });
 }
 
 abstract interface class VaultScanAwareRepository implements VaultRepository {

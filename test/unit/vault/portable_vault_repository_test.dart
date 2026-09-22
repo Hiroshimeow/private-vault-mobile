@@ -2,6 +2,7 @@ import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
+import 'package:private_vault_mobile/core/crypto/vault_crypto.dart';
 import 'package:private_vault_mobile/features/vault/portable_storage/portable_vault_repository.dart';
 import 'package:private_vault_mobile/features/vault/portable_storage/portable_vault_session.dart';
 import 'package:private_vault_mobile/features/vault/portable_storage/portable_vault_storage.dart';
@@ -41,6 +42,15 @@ void main() {
     expect(
       await reopened.readBytes(added.id),
       Uint8List.fromList([1, 2, 3, 4]),
+    );
+    final material = reopened.session.requireMaterial();
+    expect(
+      File(
+        '${root.path}${Platform.pathSeparator}${material.namespaceId}'
+        '${Platform.pathSeparator}objects${Platform.pathSeparator}'
+        '${added.id}.pvm',
+      ).existsSync(),
+      isTrue,
     );
   });
 
@@ -86,24 +96,161 @@ void main() {
     expect(await second.readBytes(added.id), Uint8List.fromList([7, 8, 9]));
   });
 
-  test('corrupt object is surfaced by scan and list fails closed', () async {
+  test(
+    'stream import commits authenticated V2 bytes without partial files',
+    () async {
+      final repo = await repository('0000');
+      final item = await repo.addStream(
+        Stream<List<int>>.fromIterable([
+          [1, 2],
+          [3],
+          [4, 5, 6],
+        ]),
+        kind: VaultItemKind.video,
+      );
+
+      expect(
+        await repo.readBytes(item.id),
+        Uint8List.fromList([1, 2, 3, 4, 5, 6]),
+      );
+      final partials = await root
+          .list(recursive: true)
+          .where((entity) => entity.path.contains('.partial-'))
+          .toList();
+      expect(partials, isEmpty);
+    },
+  );
+
+  test('failed stream import aborts partial object', () async {
+    final repo = await repository('0000');
+
+    Stream<List<int>> broken() async* {
+      yield [1, 2, 3];
+      throw StateError('source failed');
+    }
+
+    await expectLater(
+      repo.addStream(broken(), kind: VaultItemKind.video),
+      throwsA(isA<StateError>()),
+    );
+    final partials = await root
+        .list(recursive: true)
+        .where((entity) => entity.path.contains('.partial-'))
+        .toList();
+    expect(partials, isEmpty);
+    expect(await repo.list(), isEmpty);
+  });
+
+  test(
+    'listing uses encrypted sidecar without decrypting large payload',
+    () async {
+      final repo = await repository('0000');
+      final added = await repo.addBytes(
+        Uint8List.fromList([1, 2, 3]),
+        kind: VaultItemKind.image,
+      );
+      final material = repo.session.requireMaterial();
+      final objects = Directory(
+        '${root.path}${Platform.pathSeparator}${material.namespaceId}'
+        '${Platform.pathSeparator}objects',
+      );
+      final payload = File(
+        '${objects.path}${Platform.pathSeparator}${added.id}.pvb',
+      );
+      final bytes = await payload.readAsBytes();
+      bytes[bytes.length - 1] ^= 1;
+      await payload.writeAsBytes(bytes, flush: true);
+
+      final scan = await repo.scan();
+      expect(scan.items.map((item) => item.id), contains(added.id));
+      expect(scan.corruptCount, 0);
+      await expectLater(
+        repo.readBytes(added.id),
+        throwsA(isA<VaultIntegrityException>()),
+      );
+    },
+  );
+
+  test(
+    'corrupt payload without sidecar is surfaced and list fails closed',
+    () async {
+      final repo = await repository('0000');
+      final added = await repo.addBytes(
+        Uint8List.fromList([1, 2, 3]),
+        kind: VaultItemKind.image,
+      );
+      final material = repo.session.requireMaterial();
+      final objects = Directory(
+        '${root.path}${Platform.pathSeparator}${material.namespaceId}'
+        '${Platform.pathSeparator}objects',
+      );
+      final payload = File(
+        '${objects.path}${Platform.pathSeparator}${added.id}.pvb',
+      );
+      final metadata = File(
+        '${objects.path}${Platform.pathSeparator}${added.id}.pvm',
+      );
+      await metadata.delete();
+      final bytes = await payload.readAsBytes();
+      bytes[bytes.length - 1] ^= 1;
+      await payload.writeAsBytes(bytes, flush: true);
+
+      final scan = await repo.scan();
+      expect(scan.items, isEmpty);
+      expect(scan.corruptCount, 1);
+      await expectLater(repo.list(), throwsA(isA<VaultScanException>()));
+    },
+  );
+
+  test(
+    'legacy payload without sidecar is reopened and sidecar is rebuilt',
+    () async {
+      final repo = await repository('0000');
+      final added = await repo.addBytes(
+        Uint8List.fromList([4, 5, 6]),
+        kind: VaultItemKind.document,
+      );
+      final material = repo.session.requireMaterial();
+      final metadata = File(
+        '${root.path}${Platform.pathSeparator}${material.namespaceId}'
+        '${Platform.pathSeparator}objects${Platform.pathSeparator}'
+        '${added.id}.pvm',
+      );
+      await metadata.delete();
+      expect(await metadata.exists(), isFalse);
+
+      final scan = await repo.scan();
+
+      expect(scan.items.map((item) => item.id), contains(added.id));
+      expect(scan.hasProblems, isFalse);
+      expect(await metadata.exists(), isTrue);
+    },
+  );
+
+  test('delete removes payload and encrypted listing metadata', () async {
     final repo = await repository('0000');
     final added = await repo.addBytes(
-      Uint8List.fromList([1, 2, 3]),
-      kind: VaultItemKind.image,
+      Uint8List.fromList([7]),
+      kind: VaultItemKind.document,
     );
     final material = repo.session.requireMaterial();
-    final file = File(
-      '${root.path}${Platform.pathSeparator}${material.namespaceId}${Platform.pathSeparator}objects${Platform.pathSeparator}${added.id}.pvb',
+    final objects = Directory(
+      '${root.path}${Platform.pathSeparator}${material.namespaceId}'
+      '${Platform.pathSeparator}objects',
     );
-    final bytes = await file.readAsBytes();
-    bytes[bytes.length - 1] ^= 1;
-    await file.writeAsBytes(bytes, flush: true);
+    final payload = File(
+      '${objects.path}${Platform.pathSeparator}${added.id}.pvb',
+    );
+    final metadata = File(
+      '${objects.path}${Platform.pathSeparator}${added.id}.pvm',
+    );
+    expect(await payload.exists(), isTrue);
+    expect(await metadata.exists(), isTrue);
 
-    final scan = await repo.scan();
-    expect(scan.items, isEmpty);
-    expect(scan.corruptCount, 1);
-    await expectLater(repo.list(), throwsA(isA<VaultScanException>()));
+    await repo.delete(added.id);
+
+    expect(await payload.exists(), isFalse);
+    expect(await metadata.exists(), isFalse);
   });
 
   test('closed session cannot read vault', () async {

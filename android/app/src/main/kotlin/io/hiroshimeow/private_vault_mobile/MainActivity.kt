@@ -1,8 +1,11 @@
 package io.hiroshimeow.private_vault_mobile
 
 import android.content.ComponentName
+import android.content.ContentResolver
 import android.content.pm.PackageManager
+import android.net.Uri
 import android.os.Bundle
+import android.provider.DocumentsContract
 import android.view.WindowManager
 import io.flutter.embedding.android.FlutterFragmentActivity
 import io.flutter.embedding.engine.FlutterEngine
@@ -48,6 +51,20 @@ class MainActivity : FlutterFragmentActivity() {
                             result.error("invalid_choice", "Unknown disguise choice", null)
                         }
                     }
+                    "deleteDocumentUri" -> {
+                        val rawUri = call.argument<String>("uri")
+                        if (rawUri == null) {
+                            result.error("invalid_uri", "Missing source URI", null)
+                        } else {
+                            try {
+                                result.success(deleteDocumentUri(rawUri))
+                            } catch (error: SecurityException) {
+                                result.error("permission_denied", error.message, null)
+                            } catch (error: Exception) {
+                                result.error("delete_failed", error.message, null)
+                            }
+                        }
+                    }
                     else -> result.notImplemented()
                 }
             }
@@ -61,6 +78,14 @@ class MainActivity : FlutterFragmentActivity() {
             return
         }
         super.onActivityResult(requestCode, resultCode, data)
+    }
+
+    private fun deleteDocumentUri(rawUri: String): Boolean {
+        val uri = Uri.parse(rawUri)
+        require(uri.scheme == ContentResolver.SCHEME_CONTENT) {
+            "Only content URIs can be deleted through Android SAF"
+        }
+        return DocumentsContract.deleteDocument(contentResolver, uri)
     }
 
     private fun setLauncherAlias(choice: String) {

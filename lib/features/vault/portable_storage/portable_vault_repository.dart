@@ -1,6 +1,7 @@
 import 'dart:math';
 import 'dart:typed_data';
 
+import 'package:cryptography/cryptography.dart';
 import 'package:private_vault_mobile/core/crypto/vault_crypto.dart';
 import 'package:private_vault_mobile/features/vault/crypto_v2/portable_vault_format.dart';
 import 'package:private_vault_mobile/features/vault/crypto_v2/portable_vault_object_codec.dart';
@@ -9,7 +10,10 @@ import 'package:private_vault_mobile/features/vault/portable_storage/portable_va
 import 'package:private_vault_mobile/features/vault/vault_repository.dart';
 
 class PortableVaultRepository
-    implements VaultScanAwareRepository, PinSessionVaultRepository {
+    implements
+        VaultScanAwareRepository,
+        PinSessionVaultRepository,
+        StreamingVaultRepository {
   PortableVaultRepository({
     required this.storage,
     required this.session,
@@ -51,7 +55,85 @@ class PortableVaultRepository
       ),
       material.encryptionKey,
     );
-    await storage.write(_objectPath(material.namespaceId, id), encoded);
+    final payloadPath = _objectPath(material.namespaceId, id);
+    await storage.write(payloadPath, encoded);
+    try {
+      await _writeMetadata(
+        namespaceId: material.namespaceId,
+        encryptionKey: material.encryptionKey,
+        id: id,
+        mediaType: _mediaTypeFor(kind),
+        createdAt: createdAt,
+      );
+    } on Object {
+      try {
+        await storage.delete(payloadPath);
+      } on Object {
+        // A later scan will surface any orphan payload.
+      }
+      rethrow;
+    }
+    return VaultItem(id: id, kind: kind, createdAt: createdAt);
+  }
+
+  @override
+  Future<VaultItem> addStream(
+    Stream<List<int>> bytes, {
+    required VaultItemKind kind,
+  }) async {
+    if (kind == VaultItemKind.unknown) {
+      throw ArgumentError.value(kind, 'kind', 'unknown cannot be persisted');
+    }
+    await _requireAccess();
+    final targetStorage = storage;
+    if (targetStorage is! PortableVaultStreamingStorage) {
+      throw const PortableVaultStreamingUnsupportedException();
+    }
+
+    final material = session.requireMaterial();
+    final createdAt = DateTime.now().toUtc();
+    final id = _newId();
+    final encoded = objectCodec.encodeStream(
+      fileName: '$id.bin',
+      mediaType: _mediaTypeFor(kind),
+      createdAtMillis: createdAt.millisecondsSinceEpoch,
+      namespaceId: material.namespaceId,
+      payload: bytes,
+      key: material.encryptionKey,
+    );
+    final writer = await targetStorage.beginWrite(
+      _objectPath(material.namespaceId, id),
+    );
+    try {
+      await writer.append(encoded.prefix);
+      await for (final chunk in encoded.cipherText) {
+        if (chunk.isNotEmpty) await writer.append(chunk);
+      }
+      final tag = await encoded.tag;
+      await writer.patch(encoded.tagOffset, tag);
+      await writer.commit();
+    } on Object {
+      await writer.abort();
+      rethrow;
+    }
+
+    final payloadPath = _objectPath(material.namespaceId, id);
+    try {
+      await _writeMetadata(
+        namespaceId: material.namespaceId,
+        encryptionKey: material.encryptionKey,
+        id: id,
+        mediaType: _mediaTypeFor(kind),
+        createdAt: createdAt,
+      );
+    } on Object {
+      try {
+        await storage.delete(payloadPath);
+      } on Object {
+        // A later scan will surface any orphan payload.
+      }
+      rethrow;
+    }
     return VaultItem(id: id, kind: kind, createdAt: createdAt);
   }
 
@@ -61,7 +143,7 @@ class PortableVaultRepository
     final material = session.requireMaterial();
     final encoded = await storage.read(_objectPath(material.namespaceId, id));
     final object = await objectCodec.decode(encoded, material.encryptionKey);
-    _validateObjectIdentity(
+    _validatePayloadIdentity(
       object,
       expectedNamespace: material.namespaceId,
       expectedId: id,
@@ -89,28 +171,30 @@ class PortableVaultRepository
       return const VaultScanResult(items: [], storageFailureCount: 1);
     }
 
+    final payloadIds = names
+        .where((name) => name.endsWith('.pvb'))
+        .map((name) => name.substring(0, name.length - '.pvb'.length))
+        .toSet();
+    final metadataIds = names
+        .where((name) => name.endsWith('.pvm'))
+        .map((name) => name.substring(0, name.length - '.pvm'.length))
+        .toSet();
+
     final items = <VaultItem>[];
-    var corruptCount = 0;
+    var corruptCount = metadataIds.difference(payloadIds).length;
     var unsupportedCount = 0;
     var foreignCount = 0;
     var storageFailureCount = 0;
 
-    for (final name in names.where((value) => value.endsWith('.pvb'))) {
-      final id = name.substring(0, name.length - '.pvb'.length);
+    for (final id in payloadIds) {
       try {
-        final encoded = await storage.read('$basePath/$name');
-        final object = await objectCodec.decode(
-          encoded,
-          material.encryptionKey,
+        final object = await _loadListingMetadata(
+          namespaceId: material.namespaceId,
+          encryptionKey: material.encryptionKey,
+          basePath: basePath,
+          id: id,
+          hasSidecar: metadataIds.contains(id),
         );
-        if (object.namespaceId != material.namespaceId) {
-          foreignCount += 1;
-          continue;
-        }
-        if (object.fileName != '$id.bin') {
-          corruptCount += 1;
-          continue;
-        }
         items.add(
           VaultItem(
             id: id,
@@ -121,6 +205,8 @@ class PortableVaultRepository
             ),
           ),
         );
+      } on PortableVaultForeignObjectException {
+        foreignCount += 1;
       } on PortableVaultUnsupportedProfileException {
         unsupportedCount += 1;
       } on VaultIntegrityException {
@@ -146,7 +232,86 @@ class PortableVaultRepository
   Future<void> delete(String id) async {
     await _requireAccess();
     final material = session.requireMaterial();
+    await storage.delete(_metadataPath(material.namespaceId, id));
     await storage.delete(_objectPath(material.namespaceId, id));
+  }
+
+  Future<PortableVaultObject> _loadListingMetadata({
+    required String namespaceId,
+    required SecretKey encryptionKey,
+    required String basePath,
+    required String id,
+    required bool hasSidecar,
+  }) async {
+    if (hasSidecar) {
+      try {
+        final encoded = await storage.read('$basePath/$id.pvm');
+        final metadata = await objectCodec.decode(encoded, encryptionKey);
+        _validateMetadataIdentity(
+          metadata,
+          expectedNamespace: namespaceId,
+          expectedId: id,
+        );
+        return metadata;
+      } on PortableVaultStorageNotFoundException {
+        // Fall through to payload recovery.
+      } on PortableVaultUnsupportedProfileException {
+        // A damaged listing cache is recoverable from the authenticated payload.
+      } on VaultIntegrityException {
+        // A damaged listing cache is recoverable from the authenticated payload.
+      } on PortableVaultFormatException {
+        // A damaged listing cache is recoverable from the authenticated payload.
+      }
+    }
+
+    final encoded = await storage.read('$basePath/$id.pvb');
+    final payload = await objectCodec.decode(encoded, encryptionKey);
+    _validatePayloadIdentity(
+      payload,
+      expectedNamespace: namespaceId,
+      expectedId: id,
+    );
+    try {
+      await _writeMetadata(
+        namespaceId: namespaceId,
+        encryptionKey: encryptionKey,
+        id: id,
+        mediaType: payload.mediaType,
+        createdAt: DateTime.fromMillisecondsSinceEpoch(
+          payload.createdAtMillis,
+          isUtc: true,
+        ),
+      );
+    } on Object {
+      // Listing metadata is a cache. A readable payload remains authoritative.
+    }
+    return PortableVaultObject(
+      fileName: '$id.meta',
+      mediaType: payload.mediaType,
+      createdAtMillis: payload.createdAtMillis,
+      namespaceId: payload.namespaceId,
+      bytes: Uint8List(0),
+    );
+  }
+
+  Future<void> _writeMetadata({
+    required String namespaceId,
+    required SecretKey encryptionKey,
+    required String id,
+    required String mediaType,
+    required DateTime createdAt,
+  }) async {
+    final encoded = await objectCodec.encode(
+      PortableVaultObject(
+        fileName: '$id.meta',
+        mediaType: mediaType,
+        createdAtMillis: createdAt.millisecondsSinceEpoch,
+        namespaceId: namespaceId,
+        bytes: Uint8List(0),
+      ),
+      encryptionKey,
+    );
+    await storage.write(_metadataPath(namespaceId, id), encoded);
   }
 
   Future<void> _requireAccess() async {
@@ -155,19 +320,37 @@ class PortableVaultRepository
     }
   }
 
-  void _validateObjectIdentity(
+  void _validatePayloadIdentity(
     PortableVaultObject object, {
     required String expectedNamespace,
     required String expectedId,
   }) {
-    if (object.namespaceId != expectedNamespace ||
-        object.fileName != '$expectedId.bin') {
+    if (object.namespaceId != expectedNamespace) {
+      throw const PortableVaultForeignObjectException();
+    }
+    if (object.fileName != '$expectedId.bin') {
+      throw const PortableVaultFormatException();
+    }
+  }
+
+  void _validateMetadataIdentity(
+    PortableVaultObject object, {
+    required String expectedNamespace,
+    required String expectedId,
+  }) {
+    if (object.namespaceId != expectedNamespace) {
+      throw const PortableVaultForeignObjectException();
+    }
+    if (object.fileName != '$expectedId.meta' || object.bytes.isNotEmpty) {
       throw const PortableVaultFormatException();
     }
   }
 
   String _objectPath(String namespaceId, String id) =>
       '$namespaceId/objects/$id.pvb';
+
+  String _metadataPath(String namespaceId, String id) =>
+      '$namespaceId/objects/$id.pvm';
 
   String _newId() {
     final random = Random.secure();
@@ -196,4 +379,12 @@ class PortableVaultRepository
 
 class PortableVaultRootUnavailableException implements Exception {
   const PortableVaultRootUnavailableException();
+}
+
+class PortableVaultStreamingUnsupportedException implements Exception {
+  const PortableVaultStreamingUnsupportedException();
+}
+
+class PortableVaultForeignObjectException implements Exception {
+  const PortableVaultForeignObjectException();
 }

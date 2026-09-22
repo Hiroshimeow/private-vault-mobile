@@ -7,6 +7,46 @@ import 'package:private_vault_mobile/core/crypto/vault_crypto.dart';
 import 'package:private_vault_mobile/features/media/media_vault_service.dart';
 import 'package:private_vault_mobile/features/vault/vault_repository.dart';
 
+class RecordingStreamingRepository implements StreamingVaultRepository {
+  final List<List<List<int>>> importedChunks = [];
+  int addBytesCalls = 0;
+
+  @override
+  Future<VaultItem> addStream(
+    Stream<List<int>> bytes, {
+    required VaultItemKind kind,
+  }) async {
+    final chunks = <List<int>>[];
+    await for (final chunk in bytes) {
+      chunks.add(List<int>.from(chunk));
+    }
+    importedChunks.add(chunks);
+    return VaultItem(
+      id: 'stream-${importedChunks.length}',
+      kind: kind,
+      createdAt: DateTime.fromMillisecondsSinceEpoch(0, isUtc: true),
+    );
+  }
+
+  @override
+  Future<VaultItem> addBytes(
+    Uint8List bytes, {
+    required VaultItemKind kind,
+  }) async {
+    addBytesCalls += 1;
+    throw StateError('streaming path should not call addBytes');
+  }
+
+  @override
+  Future<void> delete(String id) async {}
+
+  @override
+  Future<List<VaultItem>> list() async => const [];
+
+  @override
+  Future<Uint8List> readBytes(String id) async => Uint8List(0);
+}
+
 class MemoryVaultKeyStore implements VaultKeyStore {
   SecretKey? key;
 
@@ -61,30 +101,193 @@ void main() {
     );
   });
 
-  test('multi import stores every selected file', () async {
+  test('multi import loads and commits selected files sequentially', () async {
+    final events = <String>[];
+    var activeReaders = 0;
+    var maxActiveReaders = 0;
+
+    Stream<List<int>> read(String name, List<int> bytes) async* {
+      events.add('read:$name');
+      activeReaders += 1;
+      if (activeReaders > maxActiveReaders) {
+        maxActiveReaders = activeReaders;
+      }
+      await Future<void>.delayed(Duration.zero);
+      yield Uint8List.fromList(bytes);
+      activeReaders -= 1;
+    }
+
     final service = MediaVaultService(
       repository: repo,
       pickImport: () async => null,
       pickImports: () async => [
-        PickedVaultData(
-          bytes: Uint8List.fromList([1, 2, 3]),
+        PickedVaultSource(
+          name: 'first.jpg',
           kind: VaultItemKind.image,
+          openRead: () => read('first', [1, 2, 3]),
         ),
-        PickedVaultData(
-          bytes: Uint8List.fromList([4, 5, 6]),
+        PickedVaultSource(
+          name: 'second.mp4',
           kind: VaultItemKind.video,
+          openRead: () => read('second', [4, 5, 6]),
         ),
       ],
       capturePhoto: () async => null,
       saveExport: (_, _) async => true,
     );
 
-    final items = await service.importFiles();
+    expect(events, isEmpty);
+    final result = await service.importFiles();
 
-    expect(items, hasLength(2));
-    expect(await repo.readBytes(items[0].id), Uint8List.fromList([1, 2, 3]));
-    expect(await repo.readBytes(items[1].id), Uint8List.fromList([4, 5, 6]));
+    expect(result.failedCount, 0);
+    expect(result.importedCount, 2);
+    expect(maxActiveReaders, 1);
+    expect(events, ['read:first', 'read:second']);
+    expect(
+      await repo.readBytes(result.imported[0].id),
+      Uint8List.fromList([1, 2, 3]),
+    );
+    expect(
+      await repo.readBytes(result.imported[1].id),
+      Uint8List.fromList([4, 5, 6]),
+    );
   });
+
+  test('streaming repository receives source chunks directly', () async {
+    final streamingRepo = RecordingStreamingRepository();
+    final service = MediaVaultService(
+      repository: streamingRepo,
+      pickImport: () async => null,
+      pickImports: () async => [
+        PickedVaultSource(
+          name: 'large.mp4',
+          kind: VaultItemKind.video,
+          openRead: () async* {
+            yield [1, 2];
+            yield [3, 4, 5];
+          },
+        ),
+      ],
+      capturePhoto: () async => null,
+      saveExport: (_, _) async => true,
+    );
+
+    final result = await service.importFiles();
+
+    expect(result.importedCount, 1);
+    expect(result.failedCount, 0);
+    expect(streamingRepo.addBytesCalls, 0);
+    expect(streamingRepo.importedChunks, [
+      [
+        [1, 2],
+        [3, 4, 5],
+      ],
+    ]);
+  });
+
+  test(
+    'multi import continues after one source fails and reports it',
+    () async {
+      var laterSourceRead = false;
+      final service = MediaVaultService(
+        repository: repo,
+        pickImport: () async => null,
+        pickImports: () async => [
+          PickedVaultSource(
+            name: 'broken.mp4',
+            kind: VaultItemKind.video,
+            openRead: () async* {
+              throw StateError('unreadable source');
+            },
+          ),
+          PickedVaultSource(
+            name: 'healthy.jpg',
+            kind: VaultItemKind.image,
+            openRead: () async* {
+              laterSourceRead = true;
+              yield Uint8List.fromList([7, 8, 9]);
+            },
+          ),
+        ],
+        capturePhoto: () async => null,
+        saveExport: (_, _) async => true,
+      );
+
+      final result = await service.importFiles();
+
+      expect(laterSourceRead, isTrue);
+      expect(result.importedCount, 1);
+      expect(result.failedCount, 1);
+      expect(result.failures.single.name, 'broken.mp4');
+      expect(
+        await repo.readBytes(result.imported.single.id),
+        Uint8List.fromList([7, 8, 9]),
+      );
+    },
+  );
+
+  test('move deletes source only after encrypted vault commit', () async {
+    var deleteSawCommittedItem = false;
+    final service = MediaVaultService(
+      repository: repo,
+      pickImport: () async => null,
+      pickImports: () async => [
+        PickedVaultSource(
+          name: 'move-me.jpg',
+          kind: VaultItemKind.image,
+          openRead: () => Stream<List<int>>.value([4, 2]),
+          deleteSource: () async {
+            final items = await repo.list();
+            if (items.isEmpty) return;
+            final bytes = await repo.readBytes(items.last.id);
+            deleteSawCommittedItem = bytes.length == 2;
+          },
+        ),
+      ],
+      capturePhoto: () async => null,
+      saveExport: (_, _) async => true,
+    );
+
+    final result = await service.importFiles(moveSource: true);
+
+    expect(result.importedCount, 1);
+    expect(result.failedCount, 0);
+    expect(deleteSawCommittedItem, isTrue);
+    expect(
+      await repo.readBytes(result.imported.single.id),
+      Uint8List.fromList([4, 2]),
+    );
+  });
+
+  test(
+    'move deletion failure preserves committed vault item and reports it',
+    () async {
+      final service = MediaVaultService(
+        repository: repo,
+        pickImport: () async => null,
+        pickImports: () async => [
+          PickedVaultSource(
+            name: 'undeletable.mp4',
+            kind: VaultItemKind.video,
+            openRead: () => Stream<List<int>>.value([8, 8, 8]),
+            deleteSource: () async => throw StateError('delete denied'),
+          ),
+        ],
+        capturePhoto: () async => null,
+        saveExport: (_, _) async => true,
+      );
+
+      final result = await service.importFiles(moveSource: true);
+
+      expect(result.importedCount, 1);
+      expect(result.failedCount, 1);
+      expect(result.failures.single.name, 'undeletable.mp4');
+      expect(
+        await repo.readBytes(result.imported.single.id),
+        Uint8List.fromList([8, 8, 8]),
+      );
+    },
+  );
 
   test('export reads decrypted bytes only after explicit call', () async {
     final item = await repo.addBytes(

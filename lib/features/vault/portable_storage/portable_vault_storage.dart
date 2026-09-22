@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'dart:math';
 import 'dart:typed_data';
 
 abstract interface class PortableVaultRootAccess {
@@ -14,9 +15,21 @@ abstract interface class PortableVaultStorage {
   Future<void> delete(String path);
 }
 
+abstract interface class PortableVaultWriteSession {
+  Future<void> append(List<int> bytes);
+  Future<void> patch(int offset, List<int> bytes);
+  Future<void> commit();
+  Future<void> abort();
+}
+
+abstract interface class PortableVaultStreamingStorage
+    implements PortableVaultStorage {
+  Future<PortableVaultWriteSession> beginWrite(String path);
+}
+
 typedef PortableVaultRootDirectory = Future<Directory> Function();
 
-class DirectoryPortableVaultStorage implements PortableVaultStorage {
+class DirectoryPortableVaultStorage implements PortableVaultStreamingStorage {
   DirectoryPortableVaultStorage(this.rootDirectory);
 
   final PortableVaultRootDirectory rootDirectory;
@@ -74,6 +87,33 @@ class DirectoryPortableVaultStorage implements PortableVaultStorage {
   }
 
   @override
+  Future<PortableVaultWriteSession> beginWrite(String path) async {
+    try {
+      final target = await _file(path);
+      await target.parent.create(recursive: true);
+      if (await target.exists()) {
+        throw const PortableVaultStorageException('Object already exists');
+      }
+      final random = Random.secure();
+      final suffix = List<int>.generate(
+        8,
+        (_) => random.nextInt(256),
+      ).map((value) => value.toRadixString(16).padLeft(2, '0')).join();
+      final temporary = File('${target.path}.partial-$suffix');
+      final file = await temporary.open(mode: FileMode.write);
+      return _DirectoryPortableVaultWriteSession(
+        target: target,
+        temporary: temporary,
+        file: file,
+      );
+    } on PortableVaultStorageException {
+      rethrow;
+    } on FileSystemException catch (error) {
+      throw PortableVaultStorageException(error.message);
+    }
+  }
+
+  @override
   Future<void> delete(String path) async {
     try {
       final file = await _file(path);
@@ -103,6 +143,99 @@ class DirectoryPortableVaultStorage implements PortableVaultStorage {
     return normalized.isEmpty
         ? root
         : '$root${Platform.pathSeparator}$normalized';
+  }
+}
+
+class _DirectoryPortableVaultWriteSession implements PortableVaultWriteSession {
+  _DirectoryPortableVaultWriteSession({
+    required this.target,
+    required this.temporary,
+    required this._file,
+  });
+
+  final File target;
+  final File temporary;
+  RandomAccessFile? _file;
+
+  RandomAccessFile _requiredFile() {
+    final file = _file;
+    if (file == null) {
+      throw const PortableVaultStorageException('Write session is closed');
+    }
+    return file;
+  }
+
+  @override
+  Future<void> append(List<int> bytes) async {
+    if (bytes.isEmpty) return;
+    try {
+      await _requiredFile().writeFrom(bytes);
+    } on FileSystemException catch (error) {
+      throw PortableVaultStorageException(error.message);
+    }
+  }
+
+  @override
+  Future<void> patch(int offset, List<int> bytes) async {
+    if (offset < 0) {
+      throw ArgumentError.value(offset, 'offset', 'must be non-negative');
+    }
+    try {
+      final file = _requiredFile();
+      final end = await file.position();
+      if (offset + bytes.length > end) {
+        throw const PortableVaultStorageException(
+          'Patch exceeds written object length',
+        );
+      }
+      await file.setPosition(offset);
+      await file.writeFrom(bytes);
+      await file.setPosition(end);
+    } on PortableVaultStorageException {
+      rethrow;
+    } on FileSystemException catch (error) {
+      throw PortableVaultStorageException(error.message);
+    }
+  }
+
+  @override
+  Future<void> commit() async {
+    final file = _requiredFile();
+    _file = null;
+    try {
+      await file.flush();
+      await file.close();
+      await temporary.rename(target.path);
+    } on FileSystemException catch (error) {
+      if (await temporary.exists()) {
+        try {
+          await temporary.delete();
+        } on FileSystemException {
+          // Preserve the original commit failure.
+        }
+      }
+      throw PortableVaultStorageException(error.message);
+    }
+  }
+
+  @override
+  Future<void> abort() async {
+    final file = _file;
+    _file = null;
+    if (file != null) {
+      try {
+        await file.close();
+      } on FileSystemException {
+        // Best effort cleanup.
+      }
+    }
+    if (await temporary.exists()) {
+      try {
+        await temporary.delete();
+      } on FileSystemException {
+        // Best effort cleanup.
+      }
+    }
   }
 }
 

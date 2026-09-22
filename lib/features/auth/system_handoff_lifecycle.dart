@@ -2,12 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/widgets.dart';
 
-enum SystemHandoffLifecyclePhase {
-  none,
-  armed,
-  suspended,
-  backgroundTracked,
-}
+enum SystemHandoffLifecyclePhase { none, armed, suspended, backgroundTracked }
 
 class SystemHandoffLifecycleCoordinator {
   SystemHandoffLifecycleCoordinator({

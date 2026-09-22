@@ -208,6 +208,49 @@ void main() {
     expect(exports, 0);
   });
 
+  testWidgets('import menu offers transactional Move to Vault', (tester) async {
+    final repository = FakeVaultRepository();
+    var sourceDeleted = false;
+    final media = MediaVaultService(
+      repository: repository,
+      pickImport: () async => null,
+      pickImports: () async => [
+        PickedVaultSource(
+          name: 'move.jpg',
+          kind: VaultItemKind.image,
+          openRead: () => Stream<List<int>>.value([4, 2]),
+          deleteSource: () async => sourceDeleted = true,
+        ),
+      ],
+      capturePhoto: () async => null,
+      saveExport: (_, _) async => true,
+    );
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: VaultHome(
+            repository: repository,
+            media: media,
+            confirmExport: true,
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byKey(const Key('vault-import')));
+    await tester.pumpAndSettle();
+    expect(find.text('Copy to Vault'), findsOneWidget);
+    expect(find.text('Move to Vault'), findsOneWidget);
+
+    await tester.tap(find.byKey(const Key('vault-import-move')));
+    await tester.pumpAndSettle();
+
+    expect(sourceDeleted, isTrue);
+    expect(find.text('Moved 1 item(s).'), findsOneWidget);
+  });
+
   testWidgets('list failure shows only the load error state', (tester) async {
     final repository = FakeVaultRepository(failList: true);
     final media = MediaVaultService(

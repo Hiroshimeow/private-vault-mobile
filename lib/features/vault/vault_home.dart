@@ -30,6 +30,7 @@ class _VaultHomeState extends State<VaultHome> {
   bool _busy = true;
   String? _error;
   String? _warning;
+  VaultImportProgress? _importProgress;
 
   @override
   void initState() {
@@ -91,15 +92,68 @@ class _VaultHomeState extends State<VaultHome> {
     }
   }
 
-  Future<void> _import() async {
-    setState(() => _busy = true);
+  Future<void> _chooseImportMode() async {
+    final moveSource = await showModalBottomSheet<bool>(
+      context: context,
+      useRootNavigator: false,
+      showDragHandle: true,
+      builder: (sheetContext) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ListTile(
+              key: const Key('vault-import-copy'),
+              leading: const Icon(Icons.content_copy_outlined),
+              title: const Text('Copy to Vault'),
+              subtitle: const Text('Keep the original file after import.'),
+              onTap: () => Navigator.pop(sheetContext, false),
+            ),
+            ListTile(
+              key: const Key('vault-import-move'),
+              leading: const Icon(Icons.drive_file_move_outline),
+              title: const Text('Move to Vault'),
+              subtitle: const Text(
+                'Delete the original only after the protected copy is committed.',
+              ),
+              onTap: () => Navigator.pop(sheetContext, true),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (moveSource == null || !mounted) return;
+    await _import(moveSource: moveSource);
+  }
+
+  Future<void> _import({required bool moveSource}) async {
+    setState(() {
+      _busy = true;
+      _importProgress = null;
+    });
     widget.onSystemHandoffChanged?.call(true);
+    late final VaultImportBatchResult result;
     try {
-      await widget.media.importFiles();
+      result = await widget.media.importFiles(
+        moveSource: moveSource,
+        onProgress: (progress) {
+          if (!mounted) return;
+          setState(() => _importProgress = progress);
+        },
+      );
     } finally {
       widget.onSystemHandoffChanged?.call(false);
+      if (mounted) setState(() => _importProgress = null);
       await _reload();
     }
+    if (!mounted) return;
+    final verb = moveSource ? 'Moved' : 'Imported';
+    final message = result.failedCount == 0
+        ? '$verb ${result.importedCount} item(s).'
+        : '$verb ${result.importedCount} item(s); '
+              '${result.failedCount} operation(s) need attention.';
+    ScaffoldMessenger.of(context)
+      ..clearSnackBars()
+      ..showSnackBar(SnackBar(content: Text(message)));
   }
 
   Future<void> _capture() async {
@@ -262,7 +316,23 @@ class _VaultHomeState extends State<VaultHome> {
   @override
   Widget build(BuildContext context) {
     if (_busy) {
-      return const Center(child: CircularProgressIndicator());
+      final progress = _importProgress;
+      return Center(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const CircularProgressIndicator(),
+            if (progress != null) ...[
+              const SizedBox(height: 12),
+              Text(
+                'Importing ${progress.currentIndex}/${progress.total}: '
+                '${progress.name}',
+                textAlign: TextAlign.center,
+              ),
+            ],
+          ],
+        ),
+      );
     }
 
     return Column(
@@ -277,7 +347,7 @@ class _VaultHomeState extends State<VaultHome> {
                   Expanded(
                     child: FilledButton.icon(
                       key: const Key('vault-import'),
-                      onPressed: _import,
+                      onPressed: _chooseImportMode,
                       icon: const Icon(Icons.add),
                       label: const Text('Import'),
                     ),

@@ -1,3 +1,5 @@
+[Reading 93 lines from start (total: 93 lines, 0 remaining)]
+
 # Portable Vault V2
 
 Portable Vault V2 is the byte-stable cross-device format for PIN-selected vault identities.
@@ -80,7 +82,10 @@ Object ID and namespace identity are therefore inside the authenticated plaintex
   <namespace_id>/
     objects/
       <object_id>.pvb
+      <object_id>.pvm
 ```
+
+`<object_id>.pvb` is the authoritative encrypted payload object. `<object_id>.pvm` is an encrypted listing-metadata sidecar using the same V2 envelope/profile, with authenticated `name = <object_id>.meta`, the same media type/creation time/namespace, and an empty payload. Gallery/list operations read the small `.pvm` sidecar instead of decrypting the full payload. If a sidecar is missing or invalid, implementations may rebuild it from the authenticated `.pvb` payload; the payload remains authoritative.
 
 Multiple PIN identities coexist under one selected portable root. Switching PIN selects another namespace; it does not re-key or delete prior namespaces.
 

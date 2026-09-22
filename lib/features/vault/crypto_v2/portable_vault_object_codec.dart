@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:typed_data';
 
@@ -21,6 +22,20 @@ class PortableVaultObject {
   final Uint8List bytes;
 }
 
+class PortableVaultEncryptedStream {
+  const PortableVaultEncryptedStream({
+    required this.prefix,
+    required this.tagOffset,
+    required this.cipherText,
+    required this.tag,
+  });
+
+  final Uint8List prefix;
+  final int tagOffset;
+  final Stream<List<int>> cipherText;
+  final Future<Uint8List> tag;
+}
+
 class PortableVaultObjectCodec {
   PortableVaultObjectCodec({VaultCrypto? crypto})
     : _crypto = crypto ?? VaultCrypto();
@@ -28,16 +43,11 @@ class PortableVaultObjectCodec {
   final VaultCrypto _crypto;
 
   Future<Uint8List> encode(PortableVaultObject object, SecretKey key) async {
-    final metadata = Uint8List.fromList(
-      utf8.encode(
-        jsonEncode({
-          'v': PortableVaultFormatV2.formatVersion,
-          'name': object.fileName,
-          'type': object.mediaType,
-          'created': object.createdAtMillis,
-          'namespace': object.namespaceId,
-        }),
-      ),
+    final metadata = _metadataBytes(
+      fileName: object.fileName,
+      mediaType: object.mediaType,
+      createdAtMillis: object.createdAtMillis,
+      namespaceId: object.namespaceId,
     );
     final clear = BytesBuilder(copy: false)
       ..add(_u32(metadata.length))
@@ -57,6 +67,61 @@ class PortableVaultObjectCodec {
           ..add(sealed.mac)
           ..add(sealed.cipherText))
         .takeBytes();
+  }
+
+  PortableVaultEncryptedStream encodeStream({
+    required String fileName,
+    required String mediaType,
+    required int createdAtMillis,
+    required String namespaceId,
+    required Stream<List<int>> payload,
+    required SecretKey key,
+  }) {
+    final metadata = _metadataBytes(
+      fileName: fileName,
+      mediaType: mediaType,
+      createdAtMillis: createdAtMillis,
+      namespaceId: namespaceId,
+    );
+    final header = PortableVaultFormatV2.buildHeader();
+    final algorithm = AesGcm.with256bits();
+    final nonce = Uint8List.fromList(algorithm.newNonce());
+    if (nonce.length != PortableVaultFormatV2.nonceSize) {
+      throw const PortableVaultFormatException();
+    }
+
+    final tagCompleter = Completer<Uint8List>();
+    final cipherText = algorithm.encryptStream(
+      _clearStream(metadata, payload),
+      secretKey: key,
+      nonce: nonce,
+      aad: header,
+      onMac: (mac) {
+        if (tagCompleter.isCompleted) return;
+        final bytes = Uint8List.fromList(mac.bytes);
+        if (bytes.length != PortableVaultFormatV2.tagSize) {
+          tagCompleter.completeError(const PortableVaultFormatException());
+          return;
+        }
+        tagCompleter.complete(bytes);
+      },
+    );
+
+    final tagOffset =
+        PortableVaultFormatV2.headerSize + PortableVaultFormatV2.nonceSize;
+    final prefix =
+        (BytesBuilder(copy: false)
+              ..add(header)
+              ..add(nonce)
+              ..add(Uint8List(PortableVaultFormatV2.tagSize)))
+            .takeBytes();
+
+    return PortableVaultEncryptedStream(
+      prefix: prefix,
+      tagOffset: tagOffset,
+      cipherText: cipherText,
+      tag: tagCompleter.future,
+    );
   }
 
   Future<PortableVaultObject> decode(Uint8List encoded, SecretKey key) async {
@@ -112,6 +177,36 @@ class PortableVaultObjectCodec {
     } on FormatException {
       throw const PortableVaultFormatException();
     }
+  }
+
+  Stream<List<int>> _clearStream(
+    Uint8List metadata,
+    Stream<List<int>> payload,
+  ) async* {
+    yield _u32(metadata.length);
+    yield metadata;
+    await for (final chunk in payload) {
+      if (chunk.isNotEmpty) yield chunk;
+    }
+  }
+
+  Uint8List _metadataBytes({
+    required String fileName,
+    required String mediaType,
+    required int createdAtMillis,
+    required String namespaceId,
+  }) {
+    return Uint8List.fromList(
+      utf8.encode(
+        jsonEncode({
+          'v': PortableVaultFormatV2.formatVersion,
+          'name': fileName,
+          'type': mediaType,
+          'created': createdAtMillis,
+          'namespace': namespaceId,
+        }),
+      ),
+    );
   }
 
   Uint8List _u32(int value) {

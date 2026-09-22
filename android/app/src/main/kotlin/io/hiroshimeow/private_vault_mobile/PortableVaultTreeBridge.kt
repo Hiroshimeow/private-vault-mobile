@@ -3,9 +3,12 @@ package io.hiroshimeow.private_vault_mobile
 import android.app.Activity
 import android.content.Intent
 import android.net.Uri
+import android.os.ParcelFileDescriptor
 import androidx.documentfile.provider.DocumentFile
 import io.flutter.plugin.common.BinaryMessenger
 import io.flutter.plugin.common.MethodChannel
+import java.io.FileOutputStream
+import java.util.concurrent.atomic.AtomicLong
 
 class PortableVaultTreeBridge(
     private val activity: Activity,
@@ -13,6 +16,14 @@ class PortableVaultTreeBridge(
 ) {
     private val channel = MethodChannel(messenger, CHANNEL_NAME)
     private var pendingPickResult: MethodChannel.Result? = null
+    private val nextWriteHandle = AtomicLong(1)
+    private val pendingWrites = mutableMapOf<Long, PendingWrite>()
+
+    private data class PendingWrite(
+        val temporary: DocumentFile,
+        val targetName: String,
+        val stream: FileOutputStream,
+    )
 
     init {
         channel.setMethodCallHandler { call, result ->
@@ -28,6 +39,45 @@ class PortableVaultTreeBridge(
                         result.error("invalid_bytes", "Missing bytes", null)
                     } else {
                         respond(result) { write(path, bytes) }
+                    }
+                }
+                "beginWrite" -> {
+                    val path = call.argument<String>("path") ?: ""
+                    respond(result) { beginWrite(path) }
+                }
+                "appendWrite" -> {
+                    val handle = call.argument<Number>("handle")?.toLong()
+                    val bytes = call.argument<ByteArray>("bytes")
+                    if (handle == null || bytes == null) {
+                        result.error("invalid_write", "Missing write handle or bytes", null)
+                    } else {
+                        respond(result) { appendWrite(handle, bytes) }
+                    }
+                }
+                "patchWrite" -> {
+                    val handle = call.argument<Number>("handle")?.toLong()
+                    val offset = call.argument<Number>("offset")?.toLong()
+                    val bytes = call.argument<ByteArray>("bytes")
+                    if (handle == null || offset == null || bytes == null) {
+                        result.error("invalid_write", "Missing patch arguments", null)
+                    } else {
+                        respond(result) { patchWrite(handle, offset, bytes) }
+                    }
+                }
+                "commitWrite" -> {
+                    val handle = call.argument<Number>("handle")?.toLong()
+                    if (handle == null) {
+                        result.error("invalid_write", "Missing write handle", null)
+                    } else {
+                        respond(result) { commitWrite(handle) }
+                    }
+                }
+                "abortWrite" -> {
+                    val handle = call.argument<Number>("handle")?.toLong()
+                    if (handle == null) {
+                        result.error("invalid_write", "Missing write handle", null)
+                    } else {
+                        respond(result) { abortWrite(handle) }
                     }
                 }
                 "delete" -> respond(result) { delete(call.argument<String>("path") ?: "") }
@@ -123,7 +173,7 @@ class PortableVaultTreeBridge(
     }
 
     private fun list(path: String): List<String> {
-        val dir = if (path.isBlank()) root() else resolve(path)
+        val dir = (if (path.isBlank()) root() else resolve(path))
             ?: throw IllegalStateException("Portable Vault root unavailable")
         if (!dir.isDirectory) throw IllegalStateException("Portable Vault path is not a directory")
         return dir.listFiles().mapNotNull { it.name }
@@ -151,6 +201,90 @@ class PortableVaultTreeBridge(
             stream.flush()
         } ?: throw IllegalStateException("Portable Vault object could not be opened for write")
         return true
+    }
+
+    private fun beginWrite(path: String): Long {
+        val (parent, targetName) = parentAndName(path)
+            ?: throw IllegalStateException("Portable Vault root unavailable")
+        if (parent.findFile(targetName) != null) {
+            throw IllegalStateException("Portable Vault object already exists")
+        }
+
+        val temporaryName = ".${targetName}.partial-${System.nanoTime()}"
+        val temporary = parent.createFile("application/octet-stream", temporaryName)
+            ?: throw IllegalStateException("Portable Vault temporary object could not be created")
+        val descriptor = activity.contentResolver.openFileDescriptor(temporary.uri, "rw")
+        if (descriptor == null) {
+            temporary.delete()
+            throw IllegalStateException("Portable Vault temporary object could not be opened")
+        }
+
+        val stream = ParcelFileDescriptor.AutoCloseOutputStream(descriptor)
+        val handle = nextWriteHandle.getAndIncrement()
+        pendingWrites[handle] = PendingWrite(
+            temporary = temporary,
+            targetName = targetName,
+            stream = stream,
+        )
+        return handle
+    }
+
+    private fun appendWrite(handle: Long, bytes: ByteArray): Boolean {
+        val pending = pendingWrites[handle]
+            ?: throw IllegalStateException("Portable Vault write session is not active")
+        val channel = pending.stream.channel
+        channel.position(channel.size())
+        pending.stream.write(bytes)
+        return true
+    }
+
+    private fun patchWrite(handle: Long, offset: Long, bytes: ByteArray): Boolean {
+        require(offset >= 0) { "Patch offset must be non-negative" }
+        val pending = pendingWrites[handle]
+            ?: throw IllegalStateException("Portable Vault write session is not active")
+        val channel = pending.stream.channel
+        val end = channel.size()
+        if (offset + bytes.size > end) {
+            throw IllegalArgumentException("Patch exceeds written object length")
+        }
+        channel.position(offset)
+        pending.stream.write(bytes)
+        channel.position(end)
+        return true
+    }
+
+    private fun commitWrite(handle: Long): Boolean {
+        val pending = pendingWrites.remove(handle)
+            ?: throw IllegalStateException("Portable Vault write session is not active")
+        try {
+            pending.stream.flush()
+            pending.stream.fd.sync()
+            pending.stream.close()
+            if (!pending.temporary.renameTo(pending.targetName)) {
+                pending.temporary.delete()
+                throw IllegalStateException("Portable Vault object commit failed")
+            }
+            return true
+        } catch (error: Exception) {
+            closeQuietly(pending.stream)
+            pending.temporary.delete()
+            throw error
+        }
+    }
+
+    private fun abortWrite(handle: Long): Boolean {
+        val pending = pendingWrites.remove(handle) ?: return true
+        closeQuietly(pending.stream)
+        pending.temporary.delete()
+        return true
+    }
+
+    private fun closeQuietly(stream: FileOutputStream) {
+        try {
+            stream.close()
+        } catch (_: Exception) {
+            // Best effort cleanup.
+        }
     }
 
     private fun delete(path: String): Boolean {
