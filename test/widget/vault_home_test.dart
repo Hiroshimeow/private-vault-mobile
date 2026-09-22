@@ -79,6 +79,16 @@ class FakeVaultRepository implements VaultRepository, VaultThumbnailRepository {
   }
 }
 
+class ScanAwareFakeVaultRepository extends FakeVaultRepository
+    implements VaultScanAwareRepository {
+  ScanAwareFakeVaultRepository(this.scanResult);
+
+  final VaultScanResult scanResult;
+
+  @override
+  Future<VaultScanResult> scan() async => scanResult;
+}
+
 void main() {
   testWidgets('new protected note is stored and previewed', (tester) async {
     final repository = FakeVaultRepository();
@@ -485,6 +495,39 @@ void main() {
     expect(saveCalls, 2);
     expect(find.text('Exported 1/2 item(s); 1 not exported.'), findsOneWidget);
     expect(find.byKey(const Key('vault-selection-count')), findsNothing);
+  });
+
+  testWidgets('orphaned sidecar cleanup remains visible without failing list', (
+    tester,
+  ) async {
+    final repository = ScanAwareFakeVaultRepository(
+      const VaultScanResult(items: [], orphanedSidecarCount: 1),
+    );
+    final media = MediaVaultService(
+      repository: repository,
+      pickImport: () async => null,
+      capturePhoto: () async => null,
+      saveExport: (_, _) async => true,
+    );
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: VaultHome(
+            repository: repository,
+            media: media,
+            confirmExport: true,
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(
+      find.textContaining('Found 1 orphaned protected cache record(s)'),
+      findsOneWidget,
+    );
+    expect(find.textContaining('could not be read'), findsNothing);
   });
 
   testWidgets('list failure shows only the load error state', (tester) async {

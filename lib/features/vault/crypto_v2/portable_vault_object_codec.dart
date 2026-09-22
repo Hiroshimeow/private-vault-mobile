@@ -91,6 +91,15 @@ class PortableVaultObjectCodec {
     }
 
     final tagCompleter = Completer<Uint8List>();
+    // The stream consumer can fail/cancel before it ever awaits [tag].
+    // Attach an error observer now so completing the shared tag future with an
+    // error never becomes an unhandled async error.
+    unawaited(
+      tagCompleter.future.then<void>(
+        (_) {},
+        onError: (Object error, StackTrace stackTrace) {},
+      ),
+    );
     final rawCipherText = algorithm.encryptStream(
       _clearStream(metadata, payload),
       secretKey: key,
@@ -184,11 +193,19 @@ class PortableVaultObjectCodec {
     Stream<List<int>> source,
     Completer<Uint8List> tagCompleter,
   ) async* {
-    await for (final chunk in source) {
-      yield chunk;
-    }
-    if (!tagCompleter.isCompleted) {
-      tagCompleter.completeError(const PortableVaultFormatException());
+    try {
+      await for (final chunk in source) {
+        yield chunk;
+      }
+    } catch (_) {
+      if (!tagCompleter.isCompleted) {
+        tagCompleter.completeError(const PortableVaultFormatException());
+      }
+      rethrow;
+    } finally {
+      if (!tagCompleter.isCompleted) {
+        tagCompleter.completeError(const PortableVaultFormatException());
+      }
     }
   }
 

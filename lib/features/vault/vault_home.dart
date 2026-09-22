@@ -57,16 +57,27 @@ class _VaultHomeState extends State<VaultHome> {
       if (repository is VaultScanAwareRepository) {
         final scan = await repository.scan();
         if (!mounted) return;
+        final warnings = <String>[];
+        if (scan.hasProblems) {
+          warnings.add(
+            '${scan.unreadableCount} protected item(s) could not be read '
+            '(corrupt: ${scan.corruptCount}, unsupported: '
+            '${scan.unsupportedCount}, access: '
+            '${scan.storageFailureCount}).',
+          );
+        }
+        if (scan.orphanedSidecarCount > 0) {
+          warnings.add(
+            'Found ${scan.orphanedSidecarCount} orphaned protected cache '
+            'record(s) with no encrypted payload. Cleanup was attempted; '
+            'this can follow an interrupted delete or external file removal.',
+          );
+        }
         setState(() {
           _items = scan.items;
           _busy = false;
           _error = null;
-          _warning = scan.hasProblems
-              ? '${scan.unreadableCount} protected item(s) could not be read '
-                    '(corrupt: ${scan.corruptCount}, unsupported: '
-                    '${scan.unsupportedCount}, access: '
-                    '${scan.storageFailureCount}).'
-              : null;
+          _warning = warnings.isEmpty ? null : warnings.join(' ');
         });
         return;
       }

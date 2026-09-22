@@ -24,9 +24,13 @@ class PortableVaultRepository
   final PortableVaultStorage storage;
   final PortableVaultSession session;
   final PortableVaultObjectCodec objectCodec;
+  final Set<String> _activeStreamWriteIds = <String>{};
 
   @override
   bool get hasOpenSession => session.isOpen;
+
+  @override
+  int get sessionGeneration => session.generation;
 
   @override
   Future<void> openSession(String pin) async {
@@ -42,7 +46,7 @@ class PortableVaultRepository
       session.clearIfGeneration(generation);
 
   @override
-  Future<void> switchSession(
+  Future<PinSessionSwitchOutcome> switchSession(
     String pin,
     Future<void> Function() commitIdentity,
   ) async {
@@ -57,11 +61,12 @@ class PortableVaultRepository
     }
     try {
       session.activate(next, expectedGeneration: expectedGeneration);
+      return PinSessionSwitchOutcome.active;
     } on PortableVaultSessionChangedException {
       // The verifier commit already succeeded. A lock/panic or a newer
-      // session owns the generation now, so preserve that boundary and treat
-      // the PIN identity change itself as committed.
-      return;
+      // session owns the generation now, so preserve that boundary and report
+      // that the identity changed but requires a fresh unlock.
+      return PinSessionSwitchOutcome.committedSessionClosed;
     }
   }
 
@@ -136,20 +141,31 @@ class PortableVaultRepository
       payload: bytes,
       key: material.encryptionKey,
     );
-    final writer = await targetStorage.beginWrite(
-      _objectPath(material.namespaceId, id),
-    );
+    _activeStreamWriteIds.add(id);
+    late final PortableVaultWriteSession writer;
     try {
-      await writer.append(encoded.prefix);
-      await for (final chunk in encoded.cipherText) {
-        if (chunk.isNotEmpty) await writer.append(chunk);
-      }
-      final tag = await encoded.tag;
-      await writer.patch(encoded.tagOffset, tag);
-      await writer.commit();
+      writer = await targetStorage.beginWrite(
+        _objectPath(material.namespaceId, id),
+      );
     } on Object {
-      await writer.abort();
+      _activeStreamWriteIds.remove(id);
       rethrow;
+    }
+    try {
+      try {
+        await writer.append(encoded.prefix);
+        await for (final chunk in encoded.cipherText) {
+          if (chunk.isNotEmpty) await writer.append(chunk);
+        }
+        final tag = await encoded.tag;
+        await writer.patch(encoded.tagOffset, tag);
+        await writer.commit();
+      } on Object {
+        await writer.abort();
+        rethrow;
+      }
+    } finally {
+      _activeStreamWriteIds.remove(id);
     }
 
     final payloadPath = _objectPath(material.namespaceId, id);
@@ -271,16 +287,25 @@ class PortableVaultRepository
 
     var storageFailureCount = 0;
     final visibleNames = <String>[];
+    final survivingPartialIds = <String>{};
     final nowMillis = DateTime.now().millisecondsSinceEpoch;
     for (final name in names) {
       if (_isPartialStorageName(name)) {
-        if (_isStalePartialStorageName(name, nowMillis)) {
+        final partialId = _partialStorageObjectId(name);
+        final active =
+            partialId != null && _activeStreamWriteIds.contains(partialId);
+        var survives = true;
+        if (!active && _isStalePartialStorageName(name, nowMillis)) {
           try {
             await storage.delete('$basePath/$name');
+            survives = false;
           } on PortableVaultStorageException {
-            // Stale partials are abandoned temp artifacts. Cleanup failure
-            // must not make readable protected payloads look unavailable.
+            // Abandoned temp cleanup is best effort. Preserve matching
+            // sidecars while the partial itself still exists.
           }
+        }
+        if (survives && partialId != null) {
+          survivingPartialIds.add(partialId);
         }
         continue;
       }
@@ -302,7 +327,9 @@ class PortableVaultRepository
 
     final orphanSidecarIds = metadataIds
         .union(thumbnailIds)
-        .difference(payloadIds);
+        .difference(payloadIds)
+        .difference(survivingPartialIds);
+    final orphanedSidecarCount = orphanSidecarIds.length;
     for (final id in orphanSidecarIds) {
       if (metadataIds.contains(id)) {
         try {
@@ -364,6 +391,7 @@ class PortableVaultRepository
       unsupportedCount: unsupportedCount,
       foreignCount: foreignCount,
       storageFailureCount: storageFailureCount,
+      orphanedSidecarCount: orphanedSidecarCount,
     );
   }
 
@@ -389,14 +417,34 @@ class PortableVaultRepository
 
   bool _isPartialStorageName(String name) => name.contains('.partial-');
 
+  String? _partialStorageObjectId(String name) {
+    final normalized = name.startsWith('.') ? name.substring(1) : name;
+    for (final extension in const ['.pvb', '.pvm', '.pvt']) {
+      final marker = normalized.indexOf('$extension.partial-');
+      if (marker > 0) return normalized.substring(0, marker);
+    }
+    return null;
+  }
+
   bool _isStalePartialStorageName(String name, int nowMillis) {
     final marker = name.lastIndexOf('.partial-');
     if (marker < 0) return false;
     final suffix = name.substring(marker + '.partial-'.length);
     final separator = suffix.indexOf('-');
-    if (separator <= 0) return false;
+    if (separator <= 0) {
+      // Current builds always include a millisecond timestamp. A timestamp-less
+      // partial can only be residue from an older build and is not owned by an
+      // active current writer.
+      return true;
+    }
     final createdAtMillis = int.tryParse(suffix.substring(0, separator));
-    if (createdAtMillis == null || createdAtMillis > nowMillis) return false;
+    if (createdAtMillis == null) return true;
+    if (createdAtMillis > nowMillis) {
+      // Active writes are excluded by _activeStreamWriteIds before this helper
+      // is called. A future-dated non-active partial is abandoned clock-skew
+      // residue and can be reclaimed safely.
+      return true;
+    }
     return nowMillis - createdAtMillis >= _partialCleanupAge.inMilliseconds;
   }
 

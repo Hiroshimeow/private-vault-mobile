@@ -168,6 +168,88 @@ class DeferredManualUnlockService
   }
 }
 
+class GenerationAwareTestVaultRepository
+    implements TransactionalPinSessionVaultRepository {
+  GenerationAwareTestVaultRepository({
+    this.failOpen = false,
+    this.switchOutcome = PinSessionSwitchOutcome.active,
+  });
+
+  final bool failOpen;
+  final PinSessionSwitchOutcome switchOutcome;
+  final List<int> clearGenerationCalls = <int>[];
+  int _generation = 7;
+  bool _hasOpenSession = false;
+
+  @override
+  bool get hasOpenSession => _hasOpenSession;
+
+  @override
+  int get sessionGeneration => _generation;
+
+  @override
+  Future<void> openSession(String pin) async {
+    await openSessionWithGeneration(pin);
+  }
+
+  @override
+  Future<int> openSessionWithGeneration(String pin) async {
+    if (failOpen) throw StateError('synthetic open failure');
+    _hasOpenSession = true;
+    _generation += 1;
+    return _generation;
+  }
+
+  @override
+  void clearSessionIfGeneration(int generation) {
+    clearGenerationCalls.add(generation);
+    if (generation != _generation) return;
+    _hasOpenSession = false;
+    _generation += 1;
+  }
+
+  @override
+  void clearSession() {
+    _hasOpenSession = false;
+    _generation += 1;
+  }
+
+  @override
+  Future<PinSessionSwitchOutcome> switchSession(
+    String pin,
+    Future<void> Function() commitIdentity,
+  ) async {
+    await commitIdentity();
+    if (switchOutcome == PinSessionSwitchOutcome.active) {
+      _hasOpenSession = true;
+      _generation += 1;
+    } else {
+      _hasOpenSession = false;
+      _generation += 1;
+    }
+    return switchOutcome;
+  }
+
+  @override
+  Future<VaultItem> addBytes(
+    Uint8List bytes, {
+    required VaultItemKind kind,
+  }) async => VaultItem(
+    id: 'test-item',
+    kind: kind,
+    createdAt: DateTime.utc(2026, 9, 22),
+  );
+
+  @override
+  Future<void> delete(String id) async {}
+
+  @override
+  Future<List<VaultItem>> list() async => const [];
+
+  @override
+  Future<Uint8List> readBytes(String id) async => Uint8List(0);
+}
+
 Future<void> pumpCalculatorCover(
   WidgetTester tester, {
   required Size size,
@@ -786,6 +868,76 @@ void main() {
       findsOneWidget,
     );
   });
+
+  testWidgets(
+    'failed generation-aware unlock clears only the captured generation',
+    (tester) async {
+      final lock = LockController();
+      final repository = GenerationAwareTestVaultRepository(failOpen: true);
+      await tester.pumpWidget(
+        PrivateVaultApp(
+          lockController: lock,
+          unlockService: FakeUnlockService(pin: '0000'),
+          vaultRepository: repository,
+          initialCover: CoverKind.notes,
+        ),
+      );
+
+      await tester.longPress(find.byKey(const Key('cover-title')));
+      await tester.pumpAndSettle();
+      await tester.enterText(find.byKey(const Key('unlock-pin')), '0000');
+      await tester.tap(find.text('Unlock'));
+      await tester.pumpAndSettle();
+
+      expect(repository.clearGenerationCalls, [7]);
+      expect(lock.isLocked, isTrue);
+      expect(find.text('Protected storage unavailable'), findsOneWidget);
+    },
+  );
+
+  testWidgets(
+    'PIN switch committed during lock reports that a fresh unlock is needed',
+    (tester) async {
+      final lock = LockController();
+      final repository = GenerationAwareTestVaultRepository(
+        switchOutcome: PinSessionSwitchOutcome.committedSessionClosed,
+      );
+      await tester.pumpWidget(
+        PrivateVaultApp(
+          lockController: lock,
+          unlockService: FakeUnlockService(pin: '0000'),
+          vaultRepository: repository,
+        ),
+      );
+
+      lock.unlock();
+      await tester.pumpAndSettle();
+      await tester.tap(find.byIcon(Icons.tune_outlined));
+      await tester.pumpAndSettle();
+      expect(find.text('Settings'), findsWidgets);
+      final switchPin = find.text('Switch Vault PIN');
+      await tester.scrollUntilVisible(
+        switchPin,
+        320,
+        scrollable: find.byType(Scrollable).last,
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(switchPin);
+      await tester.pumpAndSettle();
+      await tester.enterText(find.byKey(const Key('settings-new-pin')), '1234');
+      await tester.enterText(
+        find.byKey(const Key('settings-confirm-pin')),
+        '1234',
+      );
+      await tester.tap(find.byKey(const Key('settings-save-pin')));
+      await tester.pumpAndSettle();
+
+      expect(
+        find.text('PIN changed. Unlock again with the new PIN.'),
+        findsOneWidget,
+      );
+    },
+  );
 
   testWidgets('manual unlock suppresses concurrent submit attempts', (
     tester,

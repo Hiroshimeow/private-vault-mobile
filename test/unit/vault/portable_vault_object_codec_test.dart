@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
@@ -91,6 +92,32 @@ void main() {
     await expectLater(
       codec.decode(encoded, material.encryptionKey),
       throwsA(isA<PortableVaultUnsupportedProfileException>()),
+    );
+  });
+
+  test('stream failure completes MAC future with a format error', () async {
+    final material = await deriver.derive('0000');
+    final payload = Stream<List<int>>.multi((controller) {
+      controller.add([1, 2, 3]);
+      controller.addError(StateError('synthetic payload failure'));
+      controller.close();
+    });
+    final encoded = codec.encodeStream(
+      fileName: 'broken.bin',
+      mediaType: 'application/octet-stream',
+      createdAtMillis: 1,
+      namespaceId: material.namespaceId,
+      payload: payload,
+      key: material.encryptionKey,
+    );
+
+    await expectLater(
+      encoded.cipherText.drain<void>(),
+      throwsA(isA<StateError>()),
+    );
+    await expectLater(
+      encoded.tag.timeout(const Duration(seconds: 1)),
+      throwsA(isA<PortableVaultFormatException>()),
     );
   });
 }

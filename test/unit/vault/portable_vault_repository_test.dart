@@ -428,6 +428,7 @@ void main() {
       expect(await partial.exists(), isFalse);
       expect(await thumbnail.exists(), isFalse);
       expect(scan.hasProblems, isFalse);
+      expect(scan.orphanedSidecarCount, 1);
     },
   );
 
@@ -444,11 +445,44 @@ void main() {
       '${objects.path}${Platform.pathSeparator}'
       'active.pvb.partial-$freshMillis-live',
     );
+    final sidecar = File('${objects.path}${Platform.pathSeparator}active.pvt');
     await partial.writeAsBytes([9, 8, 7], flush: true);
+    await sidecar.writeAsBytes([6, 5, 4], flush: true);
 
     final scan = await repo.scan();
 
     expect(await partial.exists(), isTrue);
+    expect(await sidecar.exists(), isTrue);
+    expect(scan.orphanedSidecarCount, 0);
+    expect(scan.hasProblems, isFalse);
+  });
+
+  test('scan reclaims legacy and future-dated abandoned partials', () async {
+    final repo = await repository('0000');
+    final material = repo.session.requireMaterial();
+    final objects = Directory(
+      '${root.path}${Platform.pathSeparator}${material.namespaceId}'
+      '${Platform.pathSeparator}objects',
+    );
+    await objects.create(recursive: true);
+    final futureMillis = DateTime.now()
+        .add(const Duration(days: 2))
+        .millisecondsSinceEpoch;
+    final legacy = File(
+      '${objects.path}${Platform.pathSeparator}'
+      'legacy.pvb.partial-deadbeef',
+    );
+    final future = File(
+      '${objects.path}${Platform.pathSeparator}'
+      'future.pvb.partial-$futureMillis-deadbeef',
+    );
+    await legacy.writeAsBytes([1], flush: true);
+    await future.writeAsBytes([2], flush: true);
+
+    final scan = await repo.scan();
+
+    expect(await legacy.exists(), isFalse);
+    expect(await future.exists(), isFalse);
     expect(scan.hasProblems, isFalse);
   });
 
@@ -475,6 +509,7 @@ void main() {
       final scan = await repo.scan();
 
       expect(scan.hasProblems, isFalse);
+      expect(scan.orphanedSidecarCount, 1);
       expect(await orphanThumbnail.exists(), isTrue);
     },
   );
@@ -531,12 +566,13 @@ void main() {
       );
 
       var committed = false;
-      await repo.switchSession('1234', () async {
+      final outcome = await repo.switchSession('1234', () async {
         committed = true;
         session.clear();
       });
 
       expect(committed, isTrue);
+      expect(outcome, PinSessionSwitchOutcome.committedSessionClosed);
       expect(session.isOpen, isFalse);
     },
   );

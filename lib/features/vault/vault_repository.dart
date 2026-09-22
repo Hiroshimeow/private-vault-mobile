@@ -78,6 +78,7 @@ class VaultScanResult {
     this.unsupportedCount = 0,
     this.foreignCount = 0,
     this.storageFailureCount = 0,
+    this.orphanedSidecarCount = 0,
   });
 
   final List<VaultItem> items;
@@ -85,6 +86,7 @@ class VaultScanResult {
   final int unsupportedCount;
   final int foreignCount;
   final int storageFailureCount;
+  final int orphanedSidecarCount;
 
   int get unreadableCount =>
       corruptCount + unsupportedCount + foreignCount + storageFailureCount;
@@ -115,13 +117,16 @@ abstract interface class PinSessionVaultRepository implements VaultRepository {
 
 abstract interface class GenerationAwarePinSessionVaultRepository
     implements PinSessionVaultRepository {
+  int get sessionGeneration;
   Future<int> openSessionWithGeneration(String pin);
   void clearSessionIfGeneration(int generation);
 }
 
+enum PinSessionSwitchOutcome { active, committedSessionClosed }
+
 abstract interface class TransactionalPinSessionVaultRepository
     implements GenerationAwarePinSessionVaultRepository {
-  Future<void> switchSession(
+  Future<PinSessionSwitchOutcome> switchSession(
     String pin,
     Future<void> Function() commitIdentity,
   );

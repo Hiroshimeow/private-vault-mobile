@@ -30,6 +30,8 @@ import 'package:private_vault_mobile/platform/disguise_bridge.dart';
 
 enum CoverKind { calculator, notes }
 
+enum PinChangeResult { active, committedSessionClosed, failed }
+
 class PrivateVaultApp extends StatefulWidget {
   const PrivateVaultApp({
     super.key,
@@ -190,16 +192,22 @@ class _PrivateVaultAppState extends State<PrivateVaultApp>
   Future<int?> _openVaultSession(String pin) async {
     final repository = widget.vaultRepository;
     if (repository is! PinSessionVaultRepository) return -1;
-    try {
-      if (repository is GenerationAwarePinSessionVaultRepository) {
+
+    if (repository is GenerationAwarePinSessionVaultRepository) {
+      final expectedGeneration = repository.sessionGeneration;
+      try {
         return await repository.openSessionWithGeneration(pin);
+      } on Object {
+        repository.clearSessionIfGeneration(expectedGeneration);
+        return null;
       }
+    }
+
+    try {
       await repository.openSession(pin);
       return -1;
     } on Object {
-      if (repository is! GenerationAwarePinSessionVaultRepository) {
-        repository.clearSession();
-      }
+      repository.clearSession();
       return null;
     }
   }
@@ -214,30 +222,34 @@ class _PrivateVaultAppState extends State<PrivateVaultApp>
     }
   }
 
-  Future<bool> _switchVaultPin(String pin) async {
+  Future<PinChangeResult> _switchVaultPin(String pin) async {
     final repository = widget.vaultRepository;
     try {
+      var result = PinChangeResult.active;
       if (repository is TransactionalPinSessionVaultRepository) {
-        await repository.switchSession(
+        final outcome = await repository.switchSession(
           pin,
           () => widget.unlockService.configure(pin),
         );
+        if (outcome == PinSessionSwitchOutcome.committedSessionClosed) {
+          result = PinChangeResult.committedSessionClosed;
+        }
       } else if (repository is PinSessionVaultRepository) {
         // Unknown session implementations cannot provide an atomic identity
         // switch, so fail closed instead of rotating only one side.
-        return false;
+        return PinChangeResult.failed;
       } else {
         await widget.unlockService.configure(pin);
       }
       _pinLengthFuture = null;
       await _refreshCalculatorPinLength();
-      return true;
+      return result;
     } on InvalidPinException {
       rethrow;
     } on PortableVaultInvalidPin {
       throw const InvalidPinException();
     } on Object {
-      return false;
+      return PinChangeResult.failed;
     }
   }
 
@@ -570,7 +582,7 @@ class SecretWorkspace extends StatefulWidget {
 
   final VoidCallback onLock;
   final UnlockService unlockService;
-  final Future<bool> Function(String pin) onPinChanged;
+  final Future<PinChangeResult> Function(String pin) onPinChanged;
   final ValueChanged<bool> onSystemHandoffChanged;
   final AppSettings settings;
   final ValueChanged<AppSettings> onSettingsChanged;
@@ -633,14 +645,14 @@ class _SecretWorkspaceState extends State<SecretWorkspace> {
       settings: widget.settings,
       unlockService: widget.unlockService,
       onPinChanged: (pin) async {
-        final switched = await widget.onPinChanged(pin);
-        if (switched && mounted) {
+        final result = await widget.onPinChanged(pin);
+        if (result == PinChangeResult.active && mounted) {
           setState(() {
             _vaultIdentityEpoch += 1;
             _visited.add(0);
           });
         }
-        return switched;
+        return result;
       },
       disguiseBridge: widget.disguiseBridge,
       portableRootAccess: widget.portableRootAccess,
@@ -741,7 +753,7 @@ class _SettingsHome extends StatefulWidget {
 
   final AppSettings settings;
   final UnlockService unlockService;
-  final Future<bool> Function(String pin) onPinChanged;
+  final Future<PinChangeResult> Function(String pin) onPinChanged;
   final ValueChanged<AppSettings> onChanged;
   final PlatformDisguiseBridge? disguiseBridge;
   final PortableVaultRootAccess? portableRootAccess;
@@ -988,21 +1000,33 @@ class _SettingsHomeState extends State<_SettingsHome> {
                     setDialogState(() => error = 'PINs do not match');
                     return;
                   }
-                  late final bool switched;
+                  late final PinChangeResult result;
                   try {
-                    switched = await widget.onPinChanged(pin);
+                    result = await widget.onPinChanged(pin);
                   } on InvalidPinException {
                     setDialogState(() => error = 'Use 4-12 digits');
                     return;
                   }
                   if (!dialogContext.mounted) return;
-                  if (!switched) {
+                  if (result == PinChangeResult.failed) {
                     setDialogState(
                       () => error = 'Protected storage unavailable',
                     );
                     return;
                   }
                   Navigator.of(dialogContext).pop();
+                  if (result == PinChangeResult.committedSessionClosed &&
+                      mounted) {
+                    ScaffoldMessenger.of(this.context)
+                      ..clearSnackBars()
+                      ..showSnackBar(
+                        const SnackBar(
+                          content: Text(
+                            'PIN changed. Unlock again with the new PIN.',
+                          ),
+                        ),
+                      );
+                  }
                 } finally {
                   switching = false;
                 }
