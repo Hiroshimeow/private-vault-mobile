@@ -4,12 +4,14 @@ class LegacyVaultMigrationPreview {
   const LegacyVaultMigrationPreview({
     required this.itemCount,
     this.keyUnavailable = false,
+    this.readFailure = false,
   });
 
   final int itemCount;
   final bool keyUnavailable;
+  final bool readFailure;
 
-  bool get canMigrate => itemCount > 0 && !keyUnavailable;
+  bool get canMigrate => itemCount > 0 && !keyUnavailable && !readFailure;
 }
 
 class LegacyVaultMigrationFailure {
@@ -48,6 +50,8 @@ class LegacyVaultMigrationService {
         itemCount: 0,
         keyUnavailable: true,
       );
+    } on Object {
+      return const LegacyVaultMigrationPreview(itemCount: 0, readFailure: true);
     }
   }
 

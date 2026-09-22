@@ -5,8 +5,10 @@ Portable Vault V2 is the byte-stable cross-device format for PIN-selected vault 
 ## Key schedule
 
 - PIN encoding: UTF-8 decimal digits, length 4..12.
-- KDF: Argon2id v1.3.
+- KDF: Argon2id v1.3, Argon2 version field `0x13`.
 - Salt/domain bytes: UTF-8 `PrivateVaultPortableV2`, one NUL byte, then UTF-8 `argon2id`.
+- Argon2 optional secret: empty.
+- Argon2 associated data: empty.
 - Memory: 19,456 KiB.
 - Iterations: 2.
 - Parallelism: 1.
@@ -26,6 +28,8 @@ namespace_id           = d784d2608b4851dd0826bccaf69d7fa6
 ```
 
 Changing any value above is a new key-schedule/profile and must not be shipped as the same V2 profile.
+
+Compatibility note: earlier V2 envelope experiments in this repository were development-only and were not production-wired as the released portable storage path. This document defines the frozen Portable Vault V2 interoperability profile. Legacy V1 app-private data is handled separately by the explicit copy-only migration flow.
 
 ## Object envelope
 

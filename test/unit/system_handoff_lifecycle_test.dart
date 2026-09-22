@@ -29,6 +29,28 @@ void main() {
     });
   });
 
+  test(
+    'handoff grace expiry without lifecycle transition stays foreground',
+    () {
+      fakeAsync((async) {
+        var backgrounds = 0;
+        var foregrounds = 0;
+        final coordinator = SystemHandoffLifecycleCoordinator(
+          handoffGrace: const Duration(seconds: 3),
+          onBackground: () => backgrounds += 1,
+          onForeground: () => foregrounds += 1,
+        );
+
+        coordinator.arm();
+        async.elapse(const Duration(seconds: 3));
+
+        expect(backgrounds, 0);
+        expect(foregrounds, 0);
+        expect(coordinator.phase, SystemHandoffLifecyclePhase.none);
+      });
+    },
+  );
+
   test('quick picker round trip clears grace without fake foreground', () {
     fakeAsync((async) {
       var backgrounds = 0;

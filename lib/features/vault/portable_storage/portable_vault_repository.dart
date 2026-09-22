@@ -29,7 +29,17 @@ class PortableVaultRepository
   bool get hasOpenSession => session.isOpen;
 
   @override
-  Future<void> openSession(String pin) => session.open(pin);
+  Future<void> openSession(String pin) async {
+    await openSessionWithGeneration(pin);
+  }
+
+  @override
+  Future<int> openSessionWithGeneration(String pin) =>
+      session.openWithGeneration(pin);
+
+  @override
+  void clearSessionIfGeneration(int generation) =>
+      session.clearIfGeneration(generation);
 
   @override
   Future<void> switchSession(
@@ -254,12 +264,16 @@ class PortableVaultRepository
 
     var storageFailureCount = 0;
     final visibleNames = <String>[];
+    final nowMillis = DateTime.now().millisecondsSinceEpoch;
     for (final name in names) {
       if (_isPartialStorageName(name)) {
-        try {
-          await storage.delete('$basePath/$name');
-        } on PortableVaultStorageException {
-          storageFailureCount += 1;
+        if (_isStalePartialStorageName(name, nowMillis)) {
+          try {
+            await storage.delete('$basePath/$name');
+          } on PortableVaultStorageException {
+            // Stale partials are abandoned temp artifacts. Cleanup failure
+            // must not make readable protected payloads look unavailable.
+          }
         }
         continue;
       }
@@ -279,11 +293,28 @@ class PortableVaultRepository
         .map((name) => name.substring(0, name.length - '.pvt'.length))
         .toSet();
 
-    final items = <VaultItem>[];
-    var corruptCount = metadataIds
+    final orphanSidecarIds = metadataIds
         .union(thumbnailIds)
-        .difference(payloadIds)
-        .length;
+        .difference(payloadIds);
+    for (final id in orphanSidecarIds) {
+      if (metadataIds.contains(id)) {
+        try {
+          await storage.delete('$basePath/$id.pvm');
+        } on PortableVaultStorageException {
+          // Payload-less metadata is reconstructible cache garbage.
+        }
+      }
+      if (thumbnailIds.contains(id)) {
+        try {
+          await storage.delete('$basePath/$id.pvt');
+        } on PortableVaultStorageException {
+          // Payload-less thumbnails are reconstructible cache garbage.
+        }
+      }
+    }
+
+    final items = <VaultItem>[];
+    var corruptCount = 0;
     var unsupportedCount = 0;
     var foreignCount = 0;
 
@@ -347,7 +378,20 @@ class PortableVaultRepository
     }
   }
 
+  static const _partialCleanupAge = Duration(hours: 24);
+
   bool _isPartialStorageName(String name) => name.contains('.partial-');
+
+  bool _isStalePartialStorageName(String name, int nowMillis) {
+    final marker = name.lastIndexOf('.partial-');
+    if (marker < 0) return false;
+    final suffix = name.substring(marker + '.partial-'.length);
+    final separator = suffix.indexOf('-');
+    if (separator <= 0) return false;
+    final createdAtMillis = int.tryParse(suffix.substring(0, separator));
+    if (createdAtMillis == null || createdAtMillis > nowMillis) return false;
+    return nowMillis - createdAtMillis >= _partialCleanupAge.inMilliseconds;
+  }
 
   Future<PortableVaultObject> _loadListingMetadata({
     required String namespaceId,

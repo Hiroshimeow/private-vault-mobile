@@ -34,6 +34,7 @@ class _VaultHomeState extends State<VaultHome> {
   String? _error;
   String? _warning;
   VaultImportProgress? _importProgress;
+  static const _maxThumbnailCacheEntries = 64;
   final Map<String, Future<Uint8List?>> _thumbnailFutures = {};
   final Set<String> _selectedIds = {};
 
@@ -110,10 +111,17 @@ class _VaultHomeState extends State<VaultHome> {
     }
     final repository = widget.repository;
     if (repository is! VaultThumbnailRepository) return null;
-    return _thumbnailFutures.putIfAbsent(
-      item.id,
-      () => repository.readThumbnail(item.id),
-    );
+    final cached = _thumbnailFutures.remove(item.id);
+    if (cached != null) {
+      _thumbnailFutures[item.id] = cached;
+      return cached;
+    }
+    final future = repository.readThumbnail(item.id);
+    _thumbnailFutures[item.id] = future;
+    while (_thumbnailFutures.length > _maxThumbnailCacheEntries) {
+      _thumbnailFutures.remove(_thumbnailFutures.keys.first);
+    }
+    return future;
   }
 
   void _toggleSelection(VaultItem item) {
@@ -155,12 +163,37 @@ class _VaultHomeState extends State<VaultHome> {
     if (confirmed != true) return;
 
     final ids = List<String>.from(_selectedIds);
+    var deleted = 0;
+    var failed = 0;
     for (final id in ids) {
-      await widget.repository.delete(id);
-      _thumbnailFutures.remove(id);
+      try {
+        await widget.repository.delete(id);
+        _thumbnailFutures.remove(id);
+        deleted += 1;
+      } on Object {
+        failed += 1;
+      }
     }
+    if (!mounted) return;
     _clearSelection();
     await _reload();
+    if (!mounted) return;
+    ScaffoldMessenger.of(context)
+      ..clearSnackBars()
+      ..showSnackBar(
+        SnackBar(
+          content: Text(
+            failed == 0
+                ? 'Deleted $deleted/${ids.length} item(s).'
+                : 'Deleted $deleted/${ids.length} item(s); $failed failed.',
+          ),
+        ),
+      );
+  }
+
+  String _exportFileName(VaultItem item) {
+    final shortId = item.id.length <= 8 ? item.id : item.id.substring(0, 8);
+    return 'private-item-$shortId.bin';
   }
 
   Future<void> _exportSelected() async {
@@ -193,14 +226,22 @@ class _VaultHomeState extends State<VaultHome> {
         .where((item) => _selectedIds.contains(item.id))
         .toList(growable: false);
     var exported = 0;
+    var failed = 0;
     widget.onSystemHandoffChanged?.call(true);
     try {
       for (final item in items) {
-        if (await widget.media.export(
-          item.id,
-          fileName: 'private-item-${item.id.substring(0, 8)}.bin',
-        )) {
-          exported += 1;
+        try {
+          final saved = await widget.media.export(
+            item.id,
+            fileName: _exportFileName(item),
+          );
+          if (saved) {
+            exported += 1;
+          } else {
+            failed += 1;
+          }
+        } on Object {
+          failed += 1;
         }
       }
     } finally {
@@ -211,7 +252,13 @@ class _VaultHomeState extends State<VaultHome> {
     ScaffoldMessenger.of(context)
       ..clearSnackBars()
       ..showSnackBar(
-        SnackBar(content: Text('Exported $exported/${items.length} item(s).')),
+        SnackBar(
+          content: Text(
+            failed == 0
+                ? 'Exported $exported/${items.length} item(s).'
+                : 'Exported $exported/${items.length} item(s); $failed not exported.',
+          ),
+        ),
       );
   }
 
@@ -445,10 +492,7 @@ class _VaultHomeState extends State<VaultHome> {
     widget.onSystemHandoffChanged?.call(true);
     bool ok;
     try {
-      ok = await widget.media.export(
-        item.id,
-        fileName: 'private-item-${item.id.substring(0, 8)}.bin',
-      );
+      ok = await widget.media.export(item.id, fileName: _exportFileName(item));
     } finally {
       widget.onSystemHandoffChanged?.call(false);
     }

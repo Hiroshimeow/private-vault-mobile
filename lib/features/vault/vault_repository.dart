@@ -113,8 +113,14 @@ abstract interface class PinSessionVaultRepository implements VaultRepository {
   bool get hasOpenSession;
 }
 
-abstract interface class TransactionalPinSessionVaultRepository
+abstract interface class GenerationAwarePinSessionVaultRepository
     implements PinSessionVaultRepository {
+  Future<int> openSessionWithGeneration(String pin);
+  void clearSessionIfGeneration(int generation);
+}
+
+abstract interface class TransactionalPinSessionVaultRepository
+    implements GenerationAwarePinSessionVaultRepository {
   Future<void> switchSession(
     String pin,
     Future<void> Function() commitIdentity,

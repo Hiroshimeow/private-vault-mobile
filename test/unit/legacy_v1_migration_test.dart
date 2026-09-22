@@ -18,6 +18,21 @@ class MemoryKeyStore implements VaultKeyStore {
   Future<SecretKey?> read() async => key;
 }
 
+class UnreadableSourceRepository implements VaultRepository {
+  @override
+  Future<VaultItem> addBytes(Uint8List bytes, {required VaultItemKind kind}) =>
+      throw UnimplementedError();
+
+  @override
+  Future<void> delete(String id) => throw UnimplementedError();
+
+  @override
+  Future<List<VaultItem>> list() async => throw StateError('source unreadable');
+
+  @override
+  Future<Uint8List> readBytes(String id) => throw UnimplementedError();
+}
+
 class MemoryTargetRepository implements VaultRepository {
   final items = <VaultItem>[];
   final data = <String, Uint8List>{};
@@ -146,6 +161,23 @@ void main() {
       expect(await source.readBytes(first.id), Uint8List.fromList([1]));
       expect(await source.readBytes(second.id), Uint8List.fromList([2]));
       expect(await source.list(), hasLength(2));
+    },
+  );
+
+  test(
+    'inspect reports generic read failure instead of hiding legacy data',
+    () async {
+      final service = LegacyVaultMigrationService(
+        source: UnreadableSourceRepository(),
+        target: MemoryTargetRepository(),
+      );
+
+      final preview = await service.inspect();
+
+      expect(preview.itemCount, 0);
+      expect(preview.readFailure, isTrue);
+      expect(preview.keyUnavailable, isFalse);
+      expect(preview.canMigrate, isFalse);
     },
   );
 

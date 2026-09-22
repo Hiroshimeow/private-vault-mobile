@@ -22,6 +22,7 @@ class FakeVaultRepository implements VaultRepository, VaultThumbnailRepository {
   final bytesById = <String, Uint8List>{};
   final thumbnailsById = <String, Uint8List>{};
   final thumbnailReadIds = <String>[];
+  final failDeleteIds = <String>{};
   final bool failList;
   VaultItemKind? lastAddedKind;
   Uint8List? lastAddedBytes;
@@ -46,6 +47,9 @@ class FakeVaultRepository implements VaultRepository, VaultThumbnailRepository {
 
   @override
   Future<void> delete(String id) async {
+    if (failDeleteIds.contains(id)) {
+      throw StateError('synthetic delete failure');
+    }
     items.removeWhere((item) => item.id == id);
     bytesById.remove(id);
     thumbnailsById.remove(id);
@@ -400,6 +404,86 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(repository.items, isEmpty);
+    expect(find.byKey(const Key('vault-selection-count')), findsNothing);
+  });
+
+  testWidgets('bulk delete continues after one item fails', (tester) async {
+    final repository = FakeVaultRepository();
+    final second = await repository.addBytes(
+      Uint8List.fromList('second'.codeUnits),
+      kind: VaultItemKind.note,
+    );
+    repository.failDeleteIds.add('fixture-item');
+    final media = MediaVaultService(
+      repository: repository,
+      pickImport: () async => null,
+      capturePhoto: () async => null,
+      saveExport: (_, _) async => true,
+    );
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: VaultHome(
+            repository: repository,
+            media: media,
+            confirmExport: true,
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.longPress(find.byKey(const Key('vault-tile-fixture-item')));
+    await tester.tap(find.byKey(Key('vault-tile-${second.id}')));
+    await tester.tap(find.byKey(const Key('vault-selection-delete')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.widgetWithText(FilledButton, 'Delete'));
+    await tester.pumpAndSettle();
+
+    expect(repository.items.map((item) => item.id), ['fixture-item']);
+    expect(find.text('Deleted 1/2 item(s); 1 failed.'), findsOneWidget);
+    expect(find.byKey(const Key('vault-selection-count')), findsNothing);
+  });
+
+  testWidgets('bulk export continues after one item fails', (tester) async {
+    final repository = FakeVaultRepository();
+    final second = await repository.addBytes(
+      Uint8List.fromList('second'.codeUnits),
+      kind: VaultItemKind.note,
+    );
+    var saveCalls = 0;
+    final media = MediaVaultService(
+      repository: repository,
+      pickImport: () async => null,
+      capturePhoto: () async => null,
+      saveExport: (_, _) async {
+        saveCalls += 1;
+        if (saveCalls == 1) throw StateError('synthetic export failure');
+        return true;
+      },
+    );
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: VaultHome(
+            repository: repository,
+            media: media,
+            confirmExport: false,
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.longPress(find.byKey(const Key('vault-tile-fixture-item')));
+    await tester.tap(find.byKey(Key('vault-tile-${second.id}')));
+    await tester.tap(find.byKey(const Key('vault-selection-export')));
+    await tester.pumpAndSettle();
+
+    expect(saveCalls, 2);
+    expect(find.text('Exported 1/2 item(s); 1 not exported.'), findsOneWidget);
     expect(find.byKey(const Key('vault-selection-count')), findsNothing);
   });
 

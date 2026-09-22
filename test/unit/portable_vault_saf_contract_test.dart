@@ -37,12 +37,27 @@ void main() {
     expect(bridge, contains('pending.temporary.renameTo(pending.targetName)'));
     expect(bridge, contains('ensureExactDisplayName'));
     expect(bridge, contains('file.name == expectedName'));
+    expect(bridge, contains('current.createDirectory(segment)'));
+    expect(bridge, contains('?.let { ensureExactDisplayName(it, segment) }'));
     expect(
       bridge,
       contains(
         'Portable Vault provider changed object name; refusing unsafe commit',
       ),
     );
+  });
+
+  test('Android SAF root result survives missing pending callback', () {
+    final bridge = File(
+      'android/app/src/main/kotlin/io/hiroshimeow/private_vault_mobile/'
+      'PortableVaultTreeBridge.kt',
+    ).readAsStringSync();
+
+    expect(bridge, contains('val pending = pendingPickResult'));
+    expect(bridge, isNot(contains('pendingPickResult ?: return true')));
+    expect(bridge, contains('takePersistableUriPermission'));
+    expect(bridge, contains('pending?.success(true)'));
+    expect(bridge, contains('result.error("pick_failed"'));
   });
 
   test('Android SAF bridge rejects traversal-like path segments', () {

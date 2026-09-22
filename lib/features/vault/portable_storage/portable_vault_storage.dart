@@ -99,7 +99,8 @@ class DirectoryPortableVaultStorage implements PortableVaultStreamingStorage {
         8,
         (_) => random.nextInt(256),
       ).map((value) => value.toRadixString(16).padLeft(2, '0')).join();
-      final temporary = File('${target.path}.partial-$suffix');
+      final timestamp = DateTime.now().millisecondsSinceEpoch;
+      final temporary = File('${target.path}.partial-$timestamp-$suffix');
       final file = await temporary.open(mode: FileMode.write);
       return _DirectoryPortableVaultWriteSession(
         target: target,

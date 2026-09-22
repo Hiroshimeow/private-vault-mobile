@@ -21,6 +21,7 @@ import 'package:private_vault_mobile/features/cover/notes_cover.dart';
 import 'package:private_vault_mobile/features/media/media_vault_service.dart';
 import 'package:private_vault_mobile/features/panic/panic_sensor_service.dart';
 import 'package:private_vault_mobile/features/settings/app_settings.dart';
+import 'package:private_vault_mobile/features/vault/crypto_v2/portable_vault_key_deriver.dart';
 import 'package:private_vault_mobile/features/vault/legacy_v1_migration.dart';
 import 'package:private_vault_mobile/features/vault/portable_storage/portable_vault_storage.dart';
 import 'package:private_vault_mobile/features/vault/vault_home.dart';
@@ -185,15 +186,30 @@ class _PrivateVaultAppState extends State<PrivateVaultApp>
     return _pinLengthFuture ??= lengthAware.configuredPinLength();
   }
 
-  Future<bool> _openVaultSession(String pin) async {
+  Future<int?> _openVaultSession(String pin) async {
     final repository = widget.vaultRepository;
-    if (repository is! PinSessionVaultRepository) return true;
+    if (repository is! PinSessionVaultRepository) return -1;
     try {
+      if (repository is GenerationAwarePinSessionVaultRepository) {
+        return await repository.openSessionWithGeneration(pin);
+      }
       await repository.openSession(pin);
-      return true;
+      return -1;
     } on Object {
+      if (repository is! GenerationAwarePinSessionVaultRepository) {
+        repository.clearSession();
+      }
+      return null;
+    }
+  }
+
+  void _clearVaultSessionIfOwned(int generation) {
+    final repository = widget.vaultRepository;
+    if (repository is GenerationAwarePinSessionVaultRepository &&
+        generation >= 0) {
+      repository.clearSessionIfGeneration(generation);
+    } else if (repository is PinSessionVaultRepository) {
       repository.clearSession();
-      return false;
     }
   }
 
@@ -217,6 +233,8 @@ class _PrivateVaultAppState extends State<PrivateVaultApp>
       return true;
     } on InvalidPinException {
       rethrow;
+    } on PortableVaultInvalidPin {
+      throw const InvalidPinException();
     } on Object {
       return false;
     }
@@ -271,13 +289,11 @@ class _PrivateVaultAppState extends State<PrivateVaultApp>
 
       if (_unlockAttemptController.isCurrent(state) &&
           widget.lockController.isLocked) {
-        if (!await _openVaultSession(attempt.candidate)) return;
+        final sessionGeneration = await _openVaultSession(attempt.candidate);
+        if (sessionGeneration == null) return;
         if (!_unlockAttemptController.isCurrent(state) ||
             !widget.lockController.isLocked) {
-          final repository = widget.vaultRepository;
-          if (repository is PinSessionVaultRepository) {
-            repository.clearSession();
-          }
+          _clearVaultSessionIfOwned(sessionGeneration);
           return;
         }
         widget.lockController.unlock();
@@ -353,16 +369,14 @@ class _PrivateVaultAppState extends State<PrivateVaultApp>
               }
 
               if (!sheetContext.mounted) return;
-              if (!await _openVaultSession(candidate)) {
+              final sessionGeneration = await _openVaultSession(candidate);
+              if (sessionGeneration == null) {
                 if (!sheetContext.mounted) return;
                 setSheetState(() => error = 'Protected storage unavailable');
                 return;
               }
               if (!sheetContext.mounted || !widget.lockController.isLocked) {
-                final repository = widget.vaultRepository;
-                if (repository is PinSessionVaultRepository) {
-                  repository.clearSession();
-                }
+                _clearVaultSessionIfOwned(sessionGeneration);
                 return;
               }
               Navigator.of(sheetContext).pop();
@@ -810,6 +824,16 @@ class _SettingsHomeState extends State<_SettingsHome> {
       );
       return;
     }
+    if (preview.readFailure) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Legacy data could not be inspected. The original V1 files were not changed.',
+          ),
+        ),
+      );
+      return;
+    }
     if (preview.itemCount == 0) return;
 
     final confirmed = await showDialog<bool>(
@@ -1177,7 +1201,9 @@ class _SettingsHomeState extends State<_SettingsHome> {
                   builder: (context, snapshot) {
                     final preview = snapshot.data;
                     if (preview == null ||
-                        (preview.itemCount == 0 && !preview.keyUnavailable)) {
+                        (preview.itemCount == 0 &&
+                            !preview.keyUnavailable &&
+                            !preview.readFailure)) {
                       return const SizedBox.shrink();
                     }
                     return ListTile(
@@ -1189,10 +1215,12 @@ class _SettingsHomeState extends State<_SettingsHome> {
                         preview.keyUnavailable
                             ? 'Legacy encrypted data exists, but its V1 key is unavailable. '
                                   'Original files remain untouched.'
+                            : preview.readFailure
+                            ? 'Legacy data could not be inspected. Original files remain untouched.'
                             : '${preview.itemCount} legacy item(s) can be copied into '
                                   'the current Portable Vault. Originals stay untouched.',
                       ),
-                      trailing: preview.keyUnavailable
+                      trailing: preview.keyUnavailable || preview.readFailure
                           ? const Icon(Icons.warning_amber_outlined)
                           : _legacyMigrationBusy
                           ? const SizedBox.square(

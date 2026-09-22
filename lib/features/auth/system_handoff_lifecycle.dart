@@ -68,11 +68,13 @@ class SystemHandoffLifecycleCoordinator {
 
   void _expireHandoff() {
     _graceTimer = null;
-    if (_phase != SystemHandoffLifecyclePhase.armed &&
-        _phase != SystemHandoffLifecyclePhase.suspended) {
+    if (_phase == SystemHandoffLifecyclePhase.armed) {
+      _phase = SystemHandoffLifecyclePhase.none;
       return;
     }
-    _trackBackground();
+    if (_phase == SystemHandoffLifecyclePhase.suspended) {
+      _trackBackground();
+    }
   }
 
   void _trackBackground() {

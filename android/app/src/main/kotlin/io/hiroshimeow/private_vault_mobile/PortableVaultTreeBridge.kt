@@ -89,15 +89,15 @@ class PortableVaultTreeBridge(
 
     fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?): Boolean {
         if (requestCode != REQUEST_PICK_ROOT) return false
-        val pending = pendingPickResult ?: return true
+        val pending = pendingPickResult
         pendingPickResult = null
         if (resultCode != Activity.RESULT_OK) {
-            pending.success(false)
+            pending?.success(false)
             return true
         }
         val uri = data?.data
         if (uri == null) {
-            pending.success(false)
+            pending?.success(false)
             return true
         }
         val flags = data.flags and
@@ -108,9 +108,9 @@ class PortableVaultTreeBridge(
                 .edit()
                 .putString(KEY_ROOT_URI, uri.toString())
                 .apply()
-            pending.success(true)
+            pending?.success(true)
         } catch (error: SecurityException) {
-            pending.error("persist_failed", error.message, null)
+            pending?.error("persist_failed", error.message, null)
         }
         return true
     }
@@ -127,7 +127,12 @@ class PortableVaultTreeBridge(
             addFlags(Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION)
             addFlags(Intent.FLAG_GRANT_PREFIX_URI_PERMISSION)
         }
-        activity.startActivityForResult(intent, REQUEST_PICK_ROOT)
+        try {
+            activity.startActivityForResult(intent, REQUEST_PICK_ROOT)
+        } catch (error: Exception) {
+            pendingPickResult = null
+            result.error("pick_failed", error.message, null)
+        }
     }
 
     private fun loadRootUri(): Uri? = activity
@@ -167,6 +172,7 @@ class PortableVaultTreeBridge(
         for (segment in segments.dropLast(1)) {
             current = current.findFile(segment)
                 ?: current.createDirectory(segment)
+                    ?.let { ensureExactDisplayName(it, segment) }
                 ?: return null
             if (!current.isDirectory) return null
         }
@@ -214,7 +220,8 @@ class PortableVaultTreeBridge(
             throw IllegalStateException("Portable Vault object already exists")
         }
 
-        val temporaryName = ".${targetName}.partial-${System.nanoTime()}"
+        val temporaryName =
+            ".${targetName}.partial-${System.currentTimeMillis()}-${System.nanoTime()}"
         val temporary = ensureExactDisplayName(
             parent.createFile("application/octet-stream", temporaryName)
                 ?: throw IllegalStateException("Portable Vault temporary object could not be created"),

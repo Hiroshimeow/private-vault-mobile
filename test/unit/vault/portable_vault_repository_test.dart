@@ -390,7 +390,7 @@ void main() {
   );
 
   test(
-    'scan sweeps abandoned partial writes and surfaces orphan thumbnails',
+    'scan sweeps stale partial writes and reclaims orphan sidecars',
     () async {
       final repo = await repository('0000');
       final added = await repo.addBytes(
@@ -406,9 +406,15 @@ void main() {
         '${root.path}${Platform.pathSeparator}${material.namespaceId}'
         '${Platform.pathSeparator}objects',
       );
+      final staleMillis = DateTime.now()
+          .subtract(const Duration(days: 2))
+          .millisecondsSinceEpoch;
       final partial = File(
         '${objects.path}${Platform.pathSeparator}'
-        '${added.id}.pvb.partial-deadbeef',
+        '${added.id}.pvb.partial-$staleMillis-deadbeef',
+      );
+      final thumbnail = File(
+        '${objects.path}${Platform.pathSeparator}${added.id}.pvt',
       );
       await partial.writeAsBytes([1, 2, 3], flush: true);
 
@@ -420,7 +426,56 @@ void main() {
       final scan = await repo.scan();
 
       expect(await partial.exists(), isFalse);
-      expect(scan.corruptCount, 1);
+      expect(await thumbnail.exists(), isFalse);
+      expect(scan.hasProblems, isFalse);
+    },
+  );
+
+  test('scan ignores fresh partial writes that may still be active', () async {
+    final repo = await repository('0000');
+    final material = repo.session.requireMaterial();
+    final objects = Directory(
+      '${root.path}${Platform.pathSeparator}${material.namespaceId}'
+      '${Platform.pathSeparator}objects',
+    );
+    await objects.create(recursive: true);
+    final freshMillis = DateTime.now().millisecondsSinceEpoch;
+    final partial = File(
+      '${objects.path}${Platform.pathSeparator}'
+      'active.pvb.partial-$freshMillis-live',
+    );
+    await partial.writeAsBytes([9, 8, 7], flush: true);
+
+    final scan = await repo.scan();
+
+    expect(await partial.exists(), isTrue);
+    expect(scan.hasProblems, isFalse);
+  });
+
+  test(
+    'orphan cache cleanup failure does not poison readable vault state',
+    () async {
+      final session = PortableVaultSession();
+      await session.open('0000');
+      final delegate = DirectoryPortableVaultStorage(() async => root);
+      final storage = _RecordingPortableVaultStorage(delegate);
+      final repo = PortableVaultRepository(storage: storage, session: session);
+      final material = session.requireMaterial();
+      final objects = Directory(
+        '${root.path}${Platform.pathSeparator}${material.namespaceId}'
+        '${Platform.pathSeparator}objects',
+      );
+      await objects.create(recursive: true);
+      final orphanThumbnail = File(
+        '${objects.path}${Platform.pathSeparator}orphan.pvt',
+      );
+      await orphanThumbnail.writeAsBytes([9, 9, 9], flush: true);
+      storage.failSuffix = '.pvt';
+
+      final scan = await repo.scan();
+
+      expect(scan.hasProblems, isFalse);
+      expect(await orphanThumbnail.exists(), isTrue);
     },
   );
 

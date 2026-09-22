@@ -91,7 +91,7 @@ class PortableVaultObjectCodec {
     }
 
     final tagCompleter = Completer<Uint8List>();
-    final cipherText = algorithm.encryptStream(
+    final rawCipherText = algorithm.encryptStream(
       _clearStream(metadata, payload),
       secretKey: key,
       nonce: nonce,
@@ -106,6 +106,7 @@ class PortableVaultObjectCodec {
         tagCompleter.complete(bytes);
       },
     );
+    final cipherText = _guardMacCompletion(rawCipherText, tagCompleter);
 
     final tagOffset =
         PortableVaultFormatV2.headerSize + PortableVaultFormatV2.nonceSize;
@@ -176,6 +177,18 @@ class PortableVaultObjectCodec {
       );
     } on FormatException {
       throw const PortableVaultFormatException();
+    }
+  }
+
+  Stream<List<int>> _guardMacCompletion(
+    Stream<List<int>> source,
+    Completer<Uint8List> tagCompleter,
+  ) async* {
+    await for (final chunk in source) {
+      yield chunk;
+    }
+    if (!tagCompleter.isCompleted) {
+      tagCompleter.completeError(const PortableVaultFormatException());
     }
   }
 
