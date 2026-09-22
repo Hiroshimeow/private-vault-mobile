@@ -125,6 +125,10 @@ class _PrivateVaultAppState extends State<PrivateVaultApp>
   void _purgeSecretRoutes() {
     _secretMessengerKey.currentState?.clearSnackBars();
     _secretNavigatorKey.currentState?.popUntil((route) => route.isFirst);
+    final media = widget.mediaService;
+    if (media != null) {
+      unawaited(media.purgePreviewPlaintext());
+    }
     final repository = widget.vaultRepository;
     if (repository is PinSessionVaultRepository) {
       repository.clearSession();
@@ -150,6 +154,10 @@ class _PrivateVaultAppState extends State<PrivateVaultApp>
       unawaited(biometric.cancel());
     }
     _unlockAttemptController.dispose();
+    final media = widget.mediaService;
+    if (media != null) {
+      unawaited(media.purgePreviewPlaintext());
+    }
     final repository = widget.vaultRepository;
     if (repository is PinSessionVaultRepository) {
       repository.clearSession();

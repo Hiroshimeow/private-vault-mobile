@@ -7,6 +7,8 @@ import 'package:android_file_picker/android_file_picker.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:image/image.dart' as img;
 import 'package:image_picker/image_picker.dart';
+import 'package:path/path.dart' as p;
+import 'package:path_provider/path_provider.dart';
 import 'package:private_vault_mobile/features/vault/vault_repository.dart';
 import 'package:private_vault_mobile/platform/media_source_bridge.dart';
 
@@ -77,6 +79,8 @@ typedef VaultImportProgressCallback = void Function(
 );
 
 class MediaVaultService {
+  static const _previewDirectoryName = 'private-vault-preview';
+
   factory MediaVaultService({
     required VaultRepository repository,
     required PickVaultData pickImport,
@@ -212,6 +216,50 @@ class MediaVaultService {
       item,
       () => Isolate.run(() => _buildImageThumbnail(bytes)),
     );
+  }
+
+  Future<void> cacheVideoThumbnail(VaultItem item, Uri sourceUri) async {
+    if (item.kind != VaultItemKind.video) return;
+    await _cacheThumbnail(
+      item,
+      () => const PlatformMediaSourceBridge().videoThumbnail(sourceUri),
+    );
+  }
+
+  Future<File> createVideoPreviewFile(VaultItem item, Uint8List bytes) async {
+    if (item.kind != VaultItemKind.video) {
+      throw ArgumentError.value(item.kind, 'item.kind', 'video required');
+    }
+    final temporary = await getTemporaryDirectory();
+    final directory = Directory(p.join(temporary.path, _previewDirectoryName));
+    await directory.create(recursive: true);
+    final file = File(p.join(directory.path, '${item.id}.video'));
+    await file.writeAsBytes(bytes, flush: true);
+    return file;
+  }
+
+  Future<void> deletePreviewFile(File file) async {
+    try {
+      if (await file.exists()) {
+        await file.delete();
+      }
+    } on FileSystemException {
+      // Best effort only. The preview directory is purged at lock/startup.
+    }
+  }
+
+  Future<void> purgePreviewPlaintext() async {
+    try {
+      final temporary = await getTemporaryDirectory();
+      final directory = Directory(
+        p.join(temporary.path, _previewDirectoryName),
+      );
+      if (await directory.exists()) {
+        await directory.delete(recursive: true);
+      }
+    } on Object {
+      // Keep lock/disposal paths fail-safe when platform storage is unavailable.
+    }
   }
 
   Future<VaultItem?> capturePhoto() async {

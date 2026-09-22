@@ -1,4 +1,6 @@
+import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
@@ -6,6 +8,7 @@ import 'package:private_vault_mobile/app/private_vault_theme.dart';
 import 'package:private_vault_mobile/features/media/media_vault_service.dart';
 import 'package:private_vault_mobile/features/vault/portable_storage/portable_vault_repository.dart';
 import 'package:private_vault_mobile/features/vault/vault_repository.dart';
+import 'package:video_player/video_player.dart';
 
 class VaultHome extends StatefulWidget {
   const VaultHome({
@@ -337,22 +340,48 @@ class _VaultHomeState extends State<VaultHome> {
   }
 
   Future<void> _open(VaultItem item) async {
+    File? previewFile;
     try {
-      final cachedThumbnail = item.kind == VaultItemKind.image
+      final supportsThumbnail =
+          item.kind == VaultItemKind.image || item.kind == VaultItemKind.video;
+      final cachedThumbnail = supportsThumbnail
           ? await _thumbnailFor(item)
           : null;
       final bytes = await widget.repository.readBytes(item.id);
       if (!mounted) return;
+
       if (item.kind == VaultItemKind.image && cachedThumbnail == null) {
         await widget.media.cacheImageThumbnail(item, bytes);
         _thumbnailFutures.remove(item.id);
       }
+
+      if (item.kind == VaultItemKind.video) {
+        previewFile = await widget.media.createVideoPreviewFile(item, bytes);
+        if (cachedThumbnail == null) {
+          await widget.media.cacheVideoThumbnail(
+            item,
+            Uri.file(previewFile.path),
+          );
+          _thumbnailFutures.remove(item.id);
+        }
+      }
+
       if (!mounted) return;
       if (item.kind == VaultItemKind.image) {
         await Navigator.of(context).push<void>(
           MaterialPageRoute(
             builder: (_) => _FullScreenImagePreview(
               bytes: bytes,
+              onExport: () => _confirmExport(item),
+              onDelete: () => _confirmDelete(item),
+            ),
+          ),
+        );
+      } else if (item.kind == VaultItemKind.video && previewFile != null) {
+        await Navigator.of(context).push<void>(
+          MaterialPageRoute(
+            builder: (_) => _FullScreenVideoPreview(
+              file: previewFile!,
               onExport: () => _confirmExport(item),
               onDelete: () => _confirmDelete(item),
             ),
@@ -380,6 +409,11 @@ class _VaultHomeState extends State<VaultHome> {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Item could not be decrypted.')),
       );
+    } finally {
+      final file = previewFile;
+      if (file != null) {
+        await widget.media.deletePreviewFile(file);
+      }
     }
   }
 
@@ -727,6 +761,23 @@ class _VaultGridTile extends StatelessWidget {
                             },
                           ),
                   ),
+                  if (item.kind == VaultItemKind.video)
+                    Center(
+                      child: DecoratedBox(
+                        decoration: BoxDecoration(
+                          color: Colors.black.withValues(alpha: 0.58),
+                          shape: BoxShape.circle,
+                        ),
+                        child: const Padding(
+                          padding: EdgeInsets.all(8),
+                          child: Icon(
+                            Icons.play_arrow_rounded,
+                            color: Colors.white,
+                            size: 28,
+                          ),
+                        ),
+                      ),
+                    ),
                   if (selected)
                     Positioned(
                       top: 8,
@@ -821,6 +872,146 @@ class _FullScreenImagePreview extends StatelessWidget {
             ),
           ),
         ),
+      ),
+    );
+  }
+}
+
+class _FullScreenVideoPreview extends StatefulWidget {
+  const _FullScreenVideoPreview({
+    required this.file,
+    required this.onExport,
+    required this.onDelete,
+  });
+
+  final File file;
+  final VoidCallback onExport;
+  final VoidCallback onDelete;
+
+  @override
+  State<_FullScreenVideoPreview> createState() =>
+      _FullScreenVideoPreviewState();
+}
+
+class _FullScreenVideoPreviewState extends State<_FullScreenVideoPreview> {
+  late final VideoPlayerController _controller;
+  late final Future<void> _initialize;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = VideoPlayerController.file(widget.file);
+    _initialize = _controller.initialize().then((_) {
+      if (mounted) {
+        unawaited(_controller.play());
+      }
+    });
+  }
+
+  @override
+  void dispose() {
+    unawaited(_controller.dispose());
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: Colors.black,
+      appBar: AppBar(
+        backgroundColor: Colors.black,
+        foregroundColor: Colors.white,
+        actions: [
+          IconButton(
+            key: const Key('vault-video-export'),
+            tooltip: 'Export video',
+            onPressed: widget.onExport,
+            icon: const Icon(Icons.ios_share_outlined),
+          ),
+          IconButton(
+            key: const Key('vault-video-delete'),
+            tooltip: 'Delete video',
+            onPressed: widget.onDelete,
+            icon: const Icon(Icons.delete_outline),
+          ),
+        ],
+      ),
+      body: FutureBuilder<void>(
+        future: _initialize,
+        builder: (context, snapshot) {
+          if (snapshot.hasError) {
+            return const Center(
+              child: Text(
+                'Video data could not be played.',
+                style: TextStyle(color: Colors.white),
+              ),
+            );
+          }
+          if (snapshot.connectionState != ConnectionState.done) {
+            return const Center(child: CircularProgressIndicator());
+          }
+
+          final aspectRatio = _controller.value.aspectRatio > 0
+              ? _controller.value.aspectRatio
+              : 16 / 9;
+          return SafeArea(
+            child: Column(
+              children: [
+                Expanded(
+                  child: Center(
+                    child: AspectRatio(
+                      aspectRatio: aspectRatio,
+                      child: VideoPlayer(
+                        _controller,
+                        key: const Key('vault-video-player'),
+                      ),
+                    ),
+                  ),
+                ),
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
+                  child: Column(
+                    children: [
+                      VideoProgressIndicator(
+                        _controller,
+                        allowScrubbing: true,
+                        colors: const VideoProgressColors(
+                          playedColor: Colors.white,
+                          bufferedColor: Colors.white38,
+                          backgroundColor: Colors.white24,
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+                      AnimatedBuilder(
+                        animation: _controller,
+                        builder: (context, _) => IconButton(
+                          key: const Key('vault-video-play-pause'),
+                          color: Colors.white,
+                          tooltip: _controller.value.isPlaying
+                              ? 'Pause video'
+                              : 'Play video',
+                          onPressed: () {
+                            if (_controller.value.isPlaying) {
+                              unawaited(_controller.pause());
+                            } else {
+                              unawaited(_controller.play());
+                            }
+                          },
+                          icon: Icon(
+                            _controller.value.isPlaying
+                                ? Icons.pause_circle_filled
+                                : Icons.play_circle_fill,
+                            size: 44,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          );
+        },
       ),
     );
   }

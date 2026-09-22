@@ -72,6 +72,7 @@ Future<void> main() async {
     capturePhoto: MediaVaultService.captureDevicePhoto,
     saveExport: MediaVaultService.saveDeviceExport,
   );
+  await media.purgePreviewPlaintext();
   final panic = PanicSensorService(
     lockController: lockController,
     settings: settings,
