@@ -14,6 +14,7 @@ import 'package:private_vault_mobile/features/auth/secure_unlock_service.dart';
 import 'package:private_vault_mobile/features/media/media_vault_service.dart';
 import 'package:private_vault_mobile/features/panic/panic_sensor_service.dart';
 import 'package:private_vault_mobile/features/settings/app_settings.dart';
+import 'package:private_vault_mobile/features/vault/legacy_v1_migration.dart';
 import 'package:private_vault_mobile/features/vault/portable_storage/portable_vault_repository.dart';
 import 'package:private_vault_mobile/features/vault/portable_storage/portable_vault_session.dart';
 import 'package:private_vault_mobile/features/vault/vault_repository.dart';
@@ -35,18 +36,30 @@ Future<void> main() async {
   final PortableVaultTreeBridge? portableTree = Platform.isAndroid
       ? PortableVaultTreeBridge()
       : null;
+  Future<Directory> legacyRootDirectory() async {
+    final support = await getApplicationSupportDirectory();
+    return Directory(p.join(support.path, 'private-vault'));
+  }
+
   final VaultRepository repository;
+  LegacyVaultMigrationService? legacyVaultMigration;
   if (portableTree != null) {
-    repository = PortableVaultRepository(
+    final portableRepository = PortableVaultRepository(
       storage: portableTree,
       session: PortableVaultSession(),
     );
+    repository = portableRepository;
+    legacyVaultMigration = LegacyVaultMigrationService(
+      source: LocalVaultRepository(
+        rootDirectory: legacyRootDirectory,
+        keyStore: SecureVaultKeyStore(secrets),
+        crypto: VaultCrypto(),
+      ),
+      target: portableRepository,
+    );
   } else {
     repository = LocalVaultRepository(
-      rootDirectory: () async {
-        final support = await getApplicationSupportDirectory();
-        return Directory(p.join(support.path, 'private-vault'));
-      },
+      rootDirectory: legacyRootDirectory,
       keyStore: SecureVaultKeyStore(secrets),
       crypto: VaultCrypto(),
     );
@@ -86,6 +99,7 @@ Future<void> main() async {
       panicService: panic,
       disguiseBridge: PlatformDisguiseBridge(),
       portableRootAccess: portableTree,
+      legacyVaultMigration: legacyVaultMigration,
       workProfileClient: Platform.isAndroid
           ? PigeonWorkProfileClient()
           : const UnavailableWorkProfileClient(),

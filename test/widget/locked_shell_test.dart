@@ -9,6 +9,7 @@ import 'package:private_vault_mobile/features/auth/lock_controller.dart';
 import 'package:private_vault_mobile/features/cover/calculator_cover.dart';
 import 'package:private_vault_mobile/features/media/media_vault_service.dart';
 import 'package:private_vault_mobile/features/settings/app_settings.dart';
+import 'package:private_vault_mobile/features/vault/legacy_v1_migration.dart';
 import 'package:private_vault_mobile/features/vault/vault_repository.dart';
 
 class FakeBiometricUnlock implements BiometricUnlock {
@@ -704,6 +705,64 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('Calculator'), findsOneWidget);
     expect(find.text('Delete from vault?'), findsNothing);
+  });
+
+  testWidgets('legacy V1 migration is explicit copy-only from Settings', (
+    tester,
+  ) async {
+    final lock = LockController();
+    final source = BoundaryVaultRepository();
+    final target = BoundaryVaultRepository();
+    final sourceCount = source.items.length;
+    final targetCount = target.items.length;
+    final migration = LegacyVaultMigrationService(
+      source: source,
+      target: target,
+    );
+
+    await tester.pumpWidget(
+      PrivateVaultApp(
+        lockController: lock,
+        unlockService: FakeUnlockService(),
+        vaultRepository: target,
+        mediaService: boundaryMedia(target),
+        legacyVaultMigration: migration,
+      ),
+    );
+
+    lock.unlock();
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Settings').last);
+    await tester.pumpAndSettle();
+    await tester.drag(find.byType(ListView), const Offset(0, -900));
+    await tester.pumpAndSettle();
+
+    expect(
+      find.byKey(const Key('settings-legacy-v1-migration')),
+      findsOneWidget,
+    );
+    expect(
+      find.text(
+        '$sourceCount legacy item(s) can be copied into the current Portable Vault. Originals stay untouched.',
+      ),
+      findsOneWidget,
+    );
+
+    await tester.tap(find.byKey(const Key('settings-migrate-legacy')));
+    await tester.pumpAndSettle();
+    expect(find.text('Copy legacy Vault data?'), findsOneWidget);
+
+    await tester.tap(find.byKey(const Key('settings-migrate-legacy-confirm')));
+    await tester.pumpAndSettle();
+
+    expect(source.items, hasLength(sourceCount));
+    expect(target.items, hasLength(targetCount + sourceCount));
+    expect(
+      find.text(
+        'Copied $sourceCount legacy item(s). Original V1 data was kept.',
+      ),
+      findsOneWidget,
+    );
   });
 
   testWidgets('notes cover is functional without exposing secret routes', (

@@ -21,6 +21,7 @@ import 'package:private_vault_mobile/features/cover/notes_cover.dart';
 import 'package:private_vault_mobile/features/media/media_vault_service.dart';
 import 'package:private_vault_mobile/features/panic/panic_sensor_service.dart';
 import 'package:private_vault_mobile/features/settings/app_settings.dart';
+import 'package:private_vault_mobile/features/vault/legacy_v1_migration.dart';
 import 'package:private_vault_mobile/features/vault/portable_storage/portable_vault_storage.dart';
 import 'package:private_vault_mobile/features/vault/vault_home.dart';
 import 'package:private_vault_mobile/features/vault/vault_repository.dart';
@@ -42,6 +43,7 @@ class PrivateVaultApp extends StatefulWidget {
     this.workProfileClient,
     this.vaultShuttle,
     this.portableRootAccess,
+    this.legacyVaultMigration,
     this.initialSettings = const AppSettings.defaults(),
     this.initialCover,
   });
@@ -57,6 +59,7 @@ class PrivateVaultApp extends StatefulWidget {
   final WorkProfileClient? workProfileClient;
   final VaultShuttle? vaultShuttle;
   final PortableVaultRootAccess? portableRootAccess;
+  final LegacyVaultMigrationService? legacyVaultMigration;
   final AppSettings initialSettings;
   final CoverKind? initialCover;
 
@@ -447,6 +450,7 @@ class _PrivateVaultAppState extends State<PrivateVaultApp>
             workProfileClient: widget.workProfileClient,
             vaultShuttle: widget.vaultShuttle,
             portableRootAccess: widget.portableRootAccess,
+            legacyVaultMigration: widget.legacyVaultMigration,
             onSettingsChanged: (next) {
               unawaited(_applySettings(next));
             },
@@ -506,6 +510,7 @@ class SecretWorkspace extends StatefulWidget {
     required this.onSettingsChanged,
     this.disguiseBridge,
     this.portableRootAccess,
+    this.legacyVaultMigration,
     this.workProfileClient,
     this.vaultShuttle,
     this.vaultRepository,
@@ -520,6 +525,7 @@ class SecretWorkspace extends StatefulWidget {
   final ValueChanged<AppSettings> onSettingsChanged;
   final PlatformDisguiseBridge? disguiseBridge;
   final PortableVaultRootAccess? portableRootAccess;
+  final LegacyVaultMigrationService? legacyVaultMigration;
   final WorkProfileClient? workProfileClient;
   final VaultShuttle? vaultShuttle;
   final VaultRepository? vaultRepository;
@@ -587,6 +593,7 @@ class _SecretWorkspaceState extends State<SecretWorkspace> {
       },
       disguiseBridge: widget.disguiseBridge,
       portableRootAccess: widget.portableRootAccess,
+      legacyVaultMigration: widget.legacyVaultMigration,
       onSystemHandoffChanged: widget.onSystemHandoffChanged,
       onPortableRootChanged: () {
         if (!mounted) return;
@@ -676,6 +683,7 @@ class _SettingsHome extends StatefulWidget {
     required this.onChanged,
     this.disguiseBridge,
     this.portableRootAccess,
+    this.legacyVaultMigration,
     required this.onSystemHandoffChanged,
     required this.onPortableRootChanged,
   });
@@ -686,6 +694,7 @@ class _SettingsHome extends StatefulWidget {
   final ValueChanged<AppSettings> onChanged;
   final PlatformDisguiseBridge? disguiseBridge;
   final PortableVaultRootAccess? portableRootAccess;
+  final LegacyVaultMigrationService? legacyVaultMigration;
   final ValueChanged<bool> onSystemHandoffChanged;
   final VoidCallback onPortableRootChanged;
 
@@ -697,6 +706,8 @@ class _SettingsHomeState extends State<_SettingsHome> {
   late AppSettings _draft;
   Future<DisguiseCapabilities>? _capabilities;
   Future<bool>? _portableRootStatus;
+  Future<LegacyVaultMigrationPreview>? _legacyMigrationPreview;
+  bool _legacyMigrationBusy = false;
 
   @override
   void initState() {
@@ -704,6 +715,7 @@ class _SettingsHomeState extends State<_SettingsHome> {
     _draft = widget.settings;
     _refreshCapabilities();
     _refreshPortableRootStatus();
+    _refreshLegacyMigrationPreview();
   }
 
   @override
@@ -718,6 +730,12 @@ class _SettingsHomeState extends State<_SettingsHome> {
     if (!identical(oldWidget.portableRootAccess, widget.portableRootAccess)) {
       _refreshPortableRootStatus();
     }
+    if (!identical(
+      oldWidget.legacyVaultMigration,
+      widget.legacyVaultMigration,
+    )) {
+      _refreshLegacyMigrationPreview();
+    }
   }
 
   void _refreshCapabilities() {
@@ -728,6 +746,105 @@ class _SettingsHomeState extends State<_SettingsHome> {
   void _refreshPortableRootStatus() {
     final access = widget.portableRootAccess;
     _portableRootStatus = access?.hasRoot();
+  }
+
+  void _refreshLegacyMigrationPreview() {
+    _legacyMigrationPreview = widget.legacyVaultMigration?.inspect();
+  }
+
+  Future<void> _migrateLegacyVault() async {
+    final migration = widget.legacyVaultMigration;
+    if (migration == null || _legacyMigrationBusy) return;
+
+    final rootAccess = widget.portableRootAccess;
+    if (rootAccess != null && !await rootAccess.hasRoot()) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Choose a Portable Vault folder before copying legacy data.',
+          ),
+        ),
+      );
+      return;
+    }
+
+    final preview = await migration.inspect();
+    if (!mounted) return;
+    if (preview.keyUnavailable) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Legacy encrypted data exists, but its V1 key is unavailable. '
+            'The original files were not changed.',
+          ),
+        ),
+      );
+      return;
+    }
+    if (preview.itemCount == 0) return;
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      useRootNavigator: false,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Copy legacy Vault data?'),
+        content: Text(
+          'Copy ${preview.itemCount} V1 item(s) into the current Portable Vault. '
+          'The original V1 files remain untouched. Running migration again may '
+          'create duplicate copies.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            key: const Key('settings-migrate-legacy-confirm'),
+            onPressed: () => Navigator.pop(dialogContext, true),
+            child: const Text('Copy legacy data'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+
+    setState(() => _legacyMigrationBusy = true);
+    LegacyVaultMigrationResult? result;
+    Object? failure;
+    try {
+      result = await migration.copyAll();
+    } on Object catch (error) {
+      failure = error;
+    } finally {
+      if (mounted) {
+        setState(() {
+          _legacyMigrationBusy = false;
+          _refreshLegacyMigrationPreview();
+        });
+      }
+    }
+    if (!mounted) return;
+
+    if (failure != null || result == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Legacy data could not be copied. The original V1 files were not changed.',
+          ),
+        ),
+      );
+      return;
+    }
+
+    widget.onPortableRootChanged();
+    final message = result.failedCount == 0
+        ? 'Copied ${result.importedCount} legacy item(s). Original V1 data was kept.'
+        : 'Copied ${result.importedCount} legacy item(s); '
+              '${result.failedCount} failed. Original V1 data was kept.';
+    ScaffoldMessenger.of(context)
+      ..clearSnackBars()
+      ..showSnackBar(SnackBar(content: Text(message)));
   }
 
   Future<void> _choosePortableRoot() async {
@@ -1025,6 +1142,42 @@ class _SettingsHomeState extends State<_SettingsHome> {
                     trailing: const Icon(Icons.chevron_right),
                     onTap: _choosePortableRoot,
                   ),
+                ),
+              if (widget.legacyVaultMigration != null)
+                FutureBuilder<LegacyVaultMigrationPreview>(
+                  future: _legacyMigrationPreview,
+                  builder: (context, snapshot) {
+                    final preview = snapshot.data;
+                    if (preview == null ||
+                        (preview.itemCount == 0 && !preview.keyUnavailable)) {
+                      return const SizedBox.shrink();
+                    }
+                    return ListTile(
+                      key: const Key('settings-legacy-v1-migration'),
+                      contentPadding: EdgeInsets.zero,
+                      leading: const Icon(Icons.history_outlined),
+                      title: const Text('Legacy Vault V1 data'),
+                      subtitle: Text(
+                        preview.keyUnavailable
+                            ? 'Legacy encrypted data exists, but its V1 key is unavailable. '
+                                  'Original files remain untouched.'
+                            : '${preview.itemCount} legacy item(s) can be copied into '
+                                  'the current Portable Vault. Originals stay untouched.',
+                      ),
+                      trailing: preview.keyUnavailable
+                          ? const Icon(Icons.warning_amber_outlined)
+                          : _legacyMigrationBusy
+                          ? const SizedBox.square(
+                              dimension: 24,
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            )
+                          : TextButton(
+                              key: const Key('settings-migrate-legacy'),
+                              onPressed: _migrateLegacyVault,
+                              child: const Text('Copy'),
+                            ),
+                    );
+                  },
                 ),
               SwitchListTile(
                 contentPadding: EdgeInsets.zero,
