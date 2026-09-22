@@ -51,10 +51,17 @@ class PortableVaultRepository
     final next = await session.prepare(pin);
     try {
       await commitIdentity();
-      session.activate(next, expectedGeneration: expectedGeneration);
     } on Object {
       next.destroy();
       rethrow;
+    }
+    try {
+      session.activate(next, expectedGeneration: expectedGeneration);
+    } on PortableVaultSessionChangedException {
+      // The verifier commit already succeeded. A lock/panic or a newer
+      // session owns the generation now, so preserve that boundary and treat
+      // the PIN identity change itself as committed.
+      return;
     }
   }
 

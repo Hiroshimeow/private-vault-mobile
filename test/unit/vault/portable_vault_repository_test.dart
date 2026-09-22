@@ -502,6 +502,45 @@ void main() {
     },
   );
 
+  test('generation-owned clear cannot erase a newer session', () async {
+    final session = PortableVaultSession();
+    final firstGeneration = await session.openWithGeneration('0000');
+    final firstNamespace = session.requireMaterial().namespaceId;
+
+    final secondGeneration = await session.openWithGeneration('1234');
+    final secondNamespace = session.requireMaterial().namespaceId;
+    expect(secondNamespace, isNot(firstNamespace));
+
+    session.clearIfGeneration(firstGeneration);
+    expect(session.isOpen, isTrue);
+    expect(session.generation, secondGeneration);
+    expect(session.requireMaterial().namespaceId, secondNamespace);
+
+    session.clearIfGeneration(secondGeneration);
+    expect(session.isOpen, isFalse);
+  });
+
+  test(
+    'PIN identity commit survives a lock boundary without reactivating session',
+    () async {
+      final session = PortableVaultSession();
+      await session.open('0000');
+      final repo = PortableVaultRepository(
+        storage: DirectoryPortableVaultStorage(() async => root),
+        session: session,
+      );
+
+      var committed = false;
+      await repo.switchSession('1234', () async {
+        committed = true;
+        session.clear();
+      });
+
+      expect(committed, isTrue);
+      expect(session.isOpen, isFalse);
+    },
+  );
+
   test('closed session cannot read vault', () async {
     final repo = await repository('0000');
     repo.clearSession();

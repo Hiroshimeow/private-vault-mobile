@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
@@ -144,6 +145,27 @@ class FakeUnlockService implements UnlockService, PinLengthAwareUnlockService {
 
   @override
   Future<void> configure(String pin) async {}
+}
+
+class DeferredManualUnlockService
+    implements UnlockService, PinLengthAwareUnlockService {
+  final Completer<bool> verification = Completer<bool>();
+  int verifyCalls = 0;
+
+  @override
+  Future<void> configure(String pin) async {}
+
+  @override
+  Future<int?> configuredPinLength() async => 4;
+
+  @override
+  Future<bool> isConfigured() async => true;
+
+  @override
+  Future<bool> verify(String candidate) {
+    verifyCalls += 1;
+    return verification.future;
+  }
 }
 
 Future<void> pumpCalculatorCover(
@@ -763,6 +785,37 @@ void main() {
       ),
       findsOneWidget,
     );
+  });
+
+  testWidgets('manual unlock suppresses concurrent submit attempts', (
+    tester,
+  ) async {
+    final lock = LockController();
+    final unlock = DeferredManualUnlockService();
+    await tester.pumpWidget(
+      PrivateVaultApp(
+        lockController: lock,
+        unlockService: unlock,
+        initialCover: CoverKind.notes,
+      ),
+    );
+
+    await tester.longPress(find.byKey(const Key('cover-title')));
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byKey(const Key('unlock-pin')), '0000');
+
+    await tester.tap(find.text('Unlock'));
+    await tester.pump();
+    await tester.tap(find.text('Unlock'));
+    await tester.pump();
+
+    expect(unlock.verifyCalls, 1);
+    expect(lock.isLocked, isTrue);
+
+    unlock.verification.complete(true);
+    await tester.pumpAndSettle();
+
+    expect(lock.isLocked, isFalse);
   });
 
   testWidgets('notes cover is functional without exposing secret routes', (

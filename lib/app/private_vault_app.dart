@@ -79,6 +79,7 @@ class _PrivateVaultAppState extends State<PrivateVaultApp>
   late CoverKind _cover;
   Future<int?>? _pinLengthFuture;
   int _calculatorPinLength = 4;
+  bool _manualUnlockSubmitting = false;
   final CalculatorUnlockAttemptController _unlockAttemptController =
       CalculatorUnlockAttemptController();
   late final SystemHandoffLifecycleCoordinator _handoffLifecycle;
@@ -333,54 +334,62 @@ class _PrivateVaultAppState extends State<PrivateVaultApp>
         return StatefulBuilder(
           builder: (context, setSheetState) {
             Future<void> submit() async {
-              final candidate = pin;
-              if (configured) {
-                final accepted = await widget.unlockService.verify(candidate);
-                if (!sheetContext.mounted) return;
-                if (!accepted) {
-                  setSheetState(() => error = 'PIN not accepted');
-                  return;
-                }
-              } else {
-                try {
-                  await widget.unlockService.configure(candidate);
-                  _pinLengthFuture = null;
-                } on Object {
+              if (_manualUnlockSubmitting) return;
+              _manualUnlockSubmitting = true;
+              try {
+                final candidate = pin;
+                if (configured) {
+                  final accepted = await widget.unlockService.verify(candidate);
                   if (!sheetContext.mounted) return;
-                  setSheetState(
-                    () => error = 'Use 4–12 digits for the access PIN',
-                  );
-                  return;
+                  if (!accepted) {
+                    setSheetState(() => error = 'PIN not accepted');
+                    return;
+                  }
+                } else {
+                  try {
+                    await widget.unlockService.configure(candidate);
+                    _pinLengthFuture = null;
+                  } on Object {
+                    if (!sheetContext.mounted) return;
+                    setSheetState(
+                      () => error = 'Use 4–12 digits for the access PIN',
+                    );
+                    return;
+                  }
                 }
-              }
 
-              if (_settings.biometricsEnabled) {
-                if (!biometricAvailable || biometric == null) {
+                if (_settings.biometricsEnabled) {
+                  if (!biometricAvailable || biometric == null) {
+                    if (!sheetContext.mounted) return;
+                    setSheetState(() => error = 'Biometrics unavailable');
+                    return;
+                  }
+                  final biometricAccepted = await biometric.authenticate();
                   if (!sheetContext.mounted) return;
-                  setSheetState(() => error = 'Biometrics unavailable');
-                  return;
+                  if (!biometricAccepted) {
+                    setSheetState(
+                      () => error = 'Biometric unlock not accepted',
+                    );
+                    return;
+                  }
                 }
-                final biometricAccepted = await biometric.authenticate();
-                if (!sheetContext.mounted) return;
-                if (!biometricAccepted) {
-                  setSheetState(() => error = 'Biometric unlock not accepted');
-                  return;
-                }
-              }
 
-              if (!sheetContext.mounted) return;
-              final sessionGeneration = await _openVaultSession(candidate);
-              if (sessionGeneration == null) {
                 if (!sheetContext.mounted) return;
-                setSheetState(() => error = 'Protected storage unavailable');
-                return;
+                final sessionGeneration = await _openVaultSession(candidate);
+                if (sessionGeneration == null) {
+                  if (!sheetContext.mounted) return;
+                  setSheetState(() => error = 'Protected storage unavailable');
+                  return;
+                }
+                if (!sheetContext.mounted || !widget.lockController.isLocked) {
+                  _clearVaultSessionIfOwned(sessionGeneration);
+                  return;
+                }
+                Navigator.of(sheetContext).pop();
+                widget.lockController.unlock();
+              } finally {
+                _manualUnlockSubmitting = false;
               }
-              if (!sheetContext.mounted || !widget.lockController.isLocked) {
-                _clearVaultSessionIfOwned(sessionGeneration);
-                return;
-              }
-              Navigator.of(sheetContext).pop();
-              widget.lockController.unlock();
             }
 
             return SingleChildScrollView(
@@ -927,6 +936,7 @@ class _SettingsHomeState extends State<_SettingsHome> {
   Future<void> _changePin() async {
     var pin = '';
     var confirm = '';
+    var switching = false;
     String? error;
     await showDialog<void>(
       context: context,
@@ -971,23 +981,31 @@ class _SettingsHomeState extends State<_SettingsHome> {
             FilledButton(
               key: const Key('settings-save-pin'),
               onPressed: () async {
-                if (pin != confirm) {
-                  setDialogState(() => error = 'PINs do not match');
-                  return;
-                }
-                late final bool switched;
+                if (switching) return;
+                switching = true;
                 try {
-                  switched = await widget.onPinChanged(pin);
-                } on InvalidPinException {
-                  setDialogState(() => error = 'Use 4-12 digits');
-                  return;
+                  if (pin != confirm) {
+                    setDialogState(() => error = 'PINs do not match');
+                    return;
+                  }
+                  late final bool switched;
+                  try {
+                    switched = await widget.onPinChanged(pin);
+                  } on InvalidPinException {
+                    setDialogState(() => error = 'Use 4-12 digits');
+                    return;
+                  }
+                  if (!dialogContext.mounted) return;
+                  if (!switched) {
+                    setDialogState(
+                      () => error = 'Protected storage unavailable',
+                    );
+                    return;
+                  }
+                  Navigator.of(dialogContext).pop();
+                } finally {
+                  switching = false;
                 }
-                if (!dialogContext.mounted) return;
-                if (!switched) {
-                  setDialogState(() => error = 'Protected storage unavailable');
-                  return;
-                }
-                Navigator.of(dialogContext).pop();
               },
               child: const Text('Switch PIN'),
             ),
