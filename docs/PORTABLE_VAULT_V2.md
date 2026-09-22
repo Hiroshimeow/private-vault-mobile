@@ -1,5 +1,3 @@
-[Reading 93 lines from start (total: 93 lines, 0 remaining)]
-
 # Portable Vault V2
 
 Portable Vault V2 is the byte-stable cross-device format for PIN-selected vault identities.
