@@ -113,6 +113,14 @@ abstract interface class PinSessionVaultRepository implements VaultRepository {
   bool get hasOpenSession;
 }
 
+abstract interface class TransactionalPinSessionVaultRepository
+    implements PinSessionVaultRepository {
+  Future<void> switchSession(
+    String pin,
+    Future<void> Function() commitIdentity,
+  );
+}
+
 class VaultScanException implements Exception {
   const VaultScanException(this.result);
   final VaultScanResult result;

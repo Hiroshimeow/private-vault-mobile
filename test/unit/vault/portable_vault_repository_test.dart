@@ -320,6 +320,108 @@ void main() {
     expect(await thumbnail.exists(), isFalse);
   });
 
+  test('session clear and switch destroy replaced encryption keys', () async {
+    final session = PortableVaultSession();
+    await session.open('0000');
+    final firstKey = session.requireMaterial().encryptionKey;
+    expect(firstKey.isDestroyed, isFalse);
+
+    await session.open('1234');
+    expect(firstKey.isDestroyed, isTrue);
+    final secondKey = session.requireMaterial().encryptionKey;
+    expect(secondKey.isDestroyed, isFalse);
+
+    session.clear();
+    expect(secondKey.isDestroyed, isTrue);
+    expect(session.isOpen, isFalse);
+  });
+
+  test(
+    'failed transactional PIN switch preserves the previous session',
+    () async {
+      final repo = await repository('0000');
+      final previous = repo.session.requireMaterial();
+      final previousKey = previous.encryptionKey;
+
+      await expectLater(
+        repo.switchSession('1234', () async {
+          throw StateError('verifier write failed');
+        }),
+        throwsA(isA<StateError>()),
+      );
+
+      expect(repo.session.requireMaterial().namespaceId, previous.namespaceId);
+      expect(previousKey.isDestroyed, isFalse);
+    },
+  );
+
+  test(
+    'delete removes authoritative payload before auxiliary sidecars',
+    () async {
+      final session = PortableVaultSession();
+      await session.open('0000');
+      final delegate = DirectoryPortableVaultStorage(() async => root);
+      final storage = _RecordingPortableVaultStorage(delegate);
+      final repo = PortableVaultRepository(storage: storage, session: session);
+      final added = await repo.addBytes(
+        Uint8List.fromList([1, 2, 3]),
+        kind: VaultItemKind.image,
+      );
+      await repo.writeThumbnail(
+        added.id,
+        Uint8List.fromList([0xff, 0xd8, 1, 0xff, 0xd9]),
+      );
+
+      storage.deleted.clear();
+      storage.failSuffix = '.pvm';
+      await repo.delete(added.id);
+
+      expect(storage.deleted.first, endsWith('${added.id}.pvb'));
+      final material = session.requireMaterial();
+      final payload = File(
+        '${root.path}${Platform.pathSeparator}${material.namespaceId}'
+        '${Platform.pathSeparator}objects${Platform.pathSeparator}'
+        '${added.id}.pvb',
+      );
+      expect(await payload.exists(), isFalse);
+    },
+  );
+
+  test(
+    'scan sweeps abandoned partial writes and surfaces orphan thumbnails',
+    () async {
+      final repo = await repository('0000');
+      final added = await repo.addBytes(
+        Uint8List.fromList([4, 5, 6]),
+        kind: VaultItemKind.image,
+      );
+      await repo.writeThumbnail(
+        added.id,
+        Uint8List.fromList([0xff, 0xd8, 4, 0xff, 0xd9]),
+      );
+      final material = repo.session.requireMaterial();
+      final objects = Directory(
+        '${root.path}${Platform.pathSeparator}${material.namespaceId}'
+        '${Platform.pathSeparator}objects',
+      );
+      final partial = File(
+        '${objects.path}${Platform.pathSeparator}'
+        '${added.id}.pvb.partial-deadbeef',
+      );
+      await partial.writeAsBytes([1, 2, 3], flush: true);
+
+      await File('${objects.path}${Platform.pathSeparator}${added.id}.pvb')
+          .delete();
+      await File('${objects.path}${Platform.pathSeparator}${added.id}.pvm')
+          .delete();
+
+      final scan = await repo.scan();
+
+      expect(await partial.exists(), isFalse);
+      expect(scan.corruptCount, 1);
+    },
+  );
+
   test('closed session cannot read vault', () async {
     final repo = await repository('0000');
     repo.clearSession();
@@ -340,5 +442,39 @@ Future<void> _copyDirectory(Directory source, Directory destination) async {
       await File(target).parent.create(recursive: true);
       await entity.copy(target);
     }
+  }
+}
+
+class _RecordingPortableVaultStorage implements PortableVaultStreamingStorage {
+  _RecordingPortableVaultStorage(this.delegate);
+
+  final PortableVaultStreamingStorage delegate;
+  final List<String> deleted = <String>[];
+  String? failSuffix;
+
+  @override
+  Future<bool> hasAccess() => delegate.hasAccess();
+
+  @override
+  Future<List<String>> list(String path) => delegate.list(path);
+
+  @override
+  Future<Uint8List> read(String path) => delegate.read(path);
+
+  @override
+  Future<void> write(String path, Uint8List bytes) =>
+      delegate.write(path, bytes);
+
+  @override
+  Future<PortableVaultWriteSession> beginWrite(String path) =>
+      delegate.beginWrite(path);
+
+  @override
+  Future<void> delete(String path) async {
+    deleted.add(path);
+    if (failSuffix != null && path.endsWith(failSuffix!)) {
+      throw const PortableVaultStorageException('forced delete failure');
+    }
+    await delegate.delete(path);
   }
 }

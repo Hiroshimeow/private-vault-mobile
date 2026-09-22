@@ -12,6 +12,8 @@ class PortableVaultKeyMaterial {
 
   final SecretKey encryptionKey;
   final String namespaceId;
+
+  void destroy() => encryptionKey.destroy();
 }
 
 /// Portable Vault Format V2 key schedule.
@@ -43,24 +45,39 @@ class PortableVaultKeyDeriver {
       password: pin,
       nonce: utf8.encode(PortableVaultFormatV2.argon2Domain),
     );
-    final bytes = await root.extractBytes();
-
-    final encryptionBytes = Uint8List.fromList(
-      bytes.sublist(0, PortableVaultFormatV2.cipherKeySize),
-    );
-    final namespaceSeed = bytes.sublist(
-      PortableVaultFormatV2.cipherKeySize,
-      PortableVaultFormatV2.derivedRootKeySize,
-    );
-    final namespaceHash = await Sha256().hash([
-      ...utf8.encode(PortableVaultFormatV2.namespaceDomain),
-      ...namespaceSeed,
-    ]);
-
-    return PortableVaultKeyMaterial(
-      encryptionKey: SecretKey(encryptionBytes),
-      namespaceId: _hex(namespaceHash.bytes.sublist(0, 16)),
-    );
+    try {
+      final bytes = await root.extractBytes();
+      final encryptionBytes = Uint8List.fromList(
+        bytes.sublist(0, PortableVaultFormatV2.cipherKeySize),
+      );
+      final namespaceSeed = Uint8List.fromList(
+        bytes.sublist(
+          PortableVaultFormatV2.cipherKeySize,
+          PortableVaultFormatV2.derivedRootKeySize,
+        ),
+      );
+      final encryptionKey = SecretKeyData(
+        encryptionBytes,
+        overwriteWhenDestroyed: true,
+      );
+      try {
+        final namespaceHash = await Sha256().hash([
+          ...utf8.encode(PortableVaultFormatV2.namespaceDomain),
+          ...namespaceSeed,
+        ]);
+        return PortableVaultKeyMaterial(
+          encryptionKey: encryptionKey,
+          namespaceId: _hex(namespaceHash.bytes.sublist(0, 16)),
+        );
+      } on Object {
+        encryptionKey.destroy();
+        rethrow;
+      } finally {
+        namespaceSeed.fillRange(0, namespaceSeed.length, 0);
+      }
+    } finally {
+      root.destroy();
+    }
   }
 
   String _hex(List<int> bytes) =>

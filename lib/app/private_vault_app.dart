@@ -197,6 +197,31 @@ class _PrivateVaultAppState extends State<PrivateVaultApp>
     }
   }
 
+  Future<bool> _switchVaultPin(String pin) async {
+    final repository = widget.vaultRepository;
+    try {
+      if (repository is TransactionalPinSessionVaultRepository) {
+        await repository.switchSession(
+          pin,
+          () => widget.unlockService.configure(pin),
+        );
+      } else if (repository is PinSessionVaultRepository) {
+        // Unknown session implementations cannot provide an atomic identity
+        // switch, so fail closed instead of rotating only one side.
+        return false;
+      } else {
+        await widget.unlockService.configure(pin);
+      }
+      _pinLengthFuture = null;
+      await _refreshCalculatorPinLength();
+      return true;
+    } on InvalidPinException {
+      rethrow;
+    } on Object {
+      return false;
+    }
+  }
+
   Future<void> _attemptCalculatorUnlock(CalculatorUnlockAttempt attempt) async {
     if (!widget.lockController.isLocked) return;
 
@@ -438,12 +463,7 @@ class _PrivateVaultAppState extends State<PrivateVaultApp>
           builder: (_) => SecretWorkspace(
             onLock: widget.lockController.lock,
             unlockService: widget.unlockService,
-            onPinChanged: (pin) async {
-              if (!await _openVaultSession(pin)) return false;
-              _pinLengthFuture = null;
-              await _refreshCalculatorPinLength();
-              return true;
-            },
+            onPinChanged: _switchVaultPin,
             vaultRepository: widget.vaultRepository,
             mediaService: widget.mediaService,
             onSystemHandoffChanged: (active) {
@@ -931,13 +951,13 @@ class _SettingsHomeState extends State<_SettingsHome> {
                   setDialogState(() => error = 'PINs do not match');
                   return;
                 }
+                late final bool switched;
                 try {
-                  await widget.unlockService.configure(pin);
+                  switched = await widget.onPinChanged(pin);
                 } on InvalidPinException {
                   setDialogState(() => error = 'Use 4-12 digits');
                   return;
                 }
-                final switched = await widget.onPinChanged(pin);
                 if (!dialogContext.mounted) return;
                 if (!switched) {
                   setDialogState(() => error = 'Protected storage unavailable');

@@ -12,7 +12,7 @@ import 'package:private_vault_mobile/features/vault/vault_repository.dart';
 class PortableVaultRepository
     implements
         VaultScanAwareRepository,
-        PinSessionVaultRepository,
+        TransactionalPinSessionVaultRepository,
         StreamingVaultRepository,
         VaultThumbnailRepository {
   PortableVaultRepository({
@@ -30,6 +30,22 @@ class PortableVaultRepository
 
   @override
   Future<void> openSession(String pin) => session.open(pin);
+
+  @override
+  Future<void> switchSession(
+    String pin,
+    Future<void> Function() commitIdentity,
+  ) async {
+    await _requireAccess();
+    final next = await session.prepare(pin);
+    try {
+      await commitIdentity();
+      session.activate(next);
+    } on Object {
+      next.destroy();
+      rethrow;
+    }
+  }
 
   @override
   void clearSession() => session.clear();
@@ -235,20 +251,40 @@ class PortableVaultRepository
       return const VaultScanResult(items: [], storageFailureCount: 1);
     }
 
-    final payloadIds = names
+    var storageFailureCount = 0;
+    final visibleNames = <String>[];
+    for (final name in names) {
+      if (_isPartialStorageName(name)) {
+        try {
+          await storage.delete('$basePath/$name');
+        } on PortableVaultStorageException {
+          storageFailureCount += 1;
+        }
+        continue;
+      }
+      visibleNames.add(name);
+    }
+
+    final payloadIds = visibleNames
         .where((name) => name.endsWith('.pvb'))
         .map((name) => name.substring(0, name.length - '.pvb'.length))
         .toSet();
-    final metadataIds = names
+    final metadataIds = visibleNames
         .where((name) => name.endsWith('.pvm'))
         .map((name) => name.substring(0, name.length - '.pvm'.length))
         .toSet();
+    final thumbnailIds = visibleNames
+        .where((name) => name.endsWith('.pvt'))
+        .map((name) => name.substring(0, name.length - '.pvt'.length))
+        .toSet();
 
     final items = <VaultItem>[];
-    var corruptCount = metadataIds.difference(payloadIds).length;
+    var corruptCount = metadataIds
+        .union(thumbnailIds)
+        .difference(payloadIds)
+        .length;
     var unsupportedCount = 0;
     var foreignCount = 0;
-    var storageFailureCount = 0;
 
     for (final id in payloadIds) {
       try {
@@ -296,10 +332,21 @@ class PortableVaultRepository
   Future<void> delete(String id) async {
     await _requireAccess();
     final material = session.requireMaterial();
-    await storage.delete(_thumbnailPath(material.namespaceId, id));
-    await storage.delete(_metadataPath(material.namespaceId, id));
     await storage.delete(_objectPath(material.namespaceId, id));
+    await _deleteAuxiliaryBestEffort(_metadataPath(material.namespaceId, id));
+    await _deleteAuxiliaryBestEffort(_thumbnailPath(material.namespaceId, id));
   }
+
+  Future<void> _deleteAuxiliaryBestEffort(String path) async {
+    try {
+      await storage.delete(path);
+    } on PortableVaultStorageException {
+      // The authoritative payload has already been removed. Sidecars are
+      // encrypted/reconstructible and a later scan can reconcile leftovers.
+    }
+  }
+
+  bool _isPartialStorageName(String name) => name.contains('.partial-');
 
   Future<PortableVaultObject> _loadListingMetadata({
     required String namespaceId,

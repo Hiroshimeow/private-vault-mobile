@@ -10,10 +10,20 @@ class PortableVaultSession {
   bool get isOpen => _material != null;
   int get generation => _generation;
 
+  Future<PortableVaultKeyMaterial> prepare(String pin) =>
+      keyDeriver.derive(pin);
+
   Future<void> open(String pin) async {
-    final next = await keyDeriver.derive(pin);
-    _material = next;
+    activate(await prepare(pin));
+  }
+
+  void activate(PortableVaultKeyMaterial material) {
+    final previous = _material;
+    _material = material;
     _generation += 1;
+    if (previous != null && !identical(previous, material)) {
+      previous.destroy();
+    }
   }
 
   PortableVaultKeyMaterial requireMaterial() {
@@ -23,9 +33,11 @@ class PortableVaultSession {
   }
 
   void clear() {
-    if (_material == null) return;
+    final material = _material;
+    if (material == null) return;
     _material = null;
     _generation += 1;
+    material.destroy();
   }
 }
 
