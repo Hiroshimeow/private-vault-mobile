@@ -21,7 +21,8 @@ class CalculatorCover extends StatefulWidget {
   State<CalculatorCover> createState() => _CalculatorCoverState();
 }
 
-class _CalculatorCoverState extends State<CalculatorCover> {
+class _CalculatorCoverState extends State<CalculatorCover>
+    with WidgetsBindingObserver {
   String _display = '0';
   double? _left;
   String? _operator;
@@ -32,6 +33,7 @@ class _CalculatorCoverState extends State<CalculatorCover> {
   void initState() {
     super.initState();
     _unlockGate = _newUnlockGate();
+    WidgetsBinding.instance.addObserver(this);
   }
 
   CalculatorUnlockGateController _newUnlockGate() =>
@@ -58,7 +60,15 @@ class _CalculatorCoverState extends State<CalculatorCover> {
   }
 
   @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) return;
+    _unlockGate.cancelHold(notifyRelease: true);
+    _unlockGate.clear();
+  }
+
+  @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _unlockGate.dispose();
     super.dispose();
   }

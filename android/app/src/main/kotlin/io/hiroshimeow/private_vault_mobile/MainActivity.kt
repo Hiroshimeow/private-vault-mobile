@@ -97,6 +97,14 @@ class MainActivity : FlutterFragmentActivity() {
         super.onActivityResult(requestCode, resultCode, data)
     }
 
+    override fun cleanUpFlutterEngine(flutterEngine: FlutterEngine) {
+        portableVaultTreeBridge?.dispose()
+        portableVaultTreeBridge = null
+        WorkProfileHostApi.setUp(flutterEngine.dartExecutor.binaryMessenger, null)
+        workProfileApiAdapter = null
+        super.cleanUpFlutterEngine(flutterEngine)
+    }
+
     private fun deleteDocumentUri(rawUri: String): Boolean {
         val uri = Uri.parse(rawUri)
         require(uri.scheme == ContentResolver.SCHEME_CONTENT) {

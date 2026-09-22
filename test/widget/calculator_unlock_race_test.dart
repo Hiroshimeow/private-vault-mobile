@@ -110,6 +110,41 @@ void main() {
   });
 
   testWidgets(
+    'background during eligible hold clears candidate and never verifies',
+    (tester) async {
+      final lock = LockController();
+      final unlock = DeferredUnlockService();
+      await tester.pumpWidget(
+        PrivateVaultApp(
+          lockController: lock,
+          unlockService: unlock,
+          initialSettings: const AppSettings.defaults().copyWith(
+            biometricsEnabled: true,
+          ),
+        ),
+      );
+
+      for (var index = 0; index < 4; index++) {
+        await tester.tap(find.byKey(const Key('calculator-key-0')));
+      }
+      final equals = find.byKey(const Key('calculator-key-='));
+      final gesture = await tester.startGesture(tester.getCenter(equals));
+      await tester.pump(const Duration(milliseconds: 500));
+
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.paused);
+      await tester.pump(const Duration(seconds: 3));
+
+      expect(unlock.verifyCalls, 0);
+      expect(lock.isLocked, isTrue);
+
+      await gesture.up();
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+      await tester.pump();
+      expect(unlock.verifyCalls, 0);
+    },
+  );
+
+  testWidgets(
     'release after biometric starts cancels and stale success cannot unlock',
     (tester) async {
       final lock = LockController();

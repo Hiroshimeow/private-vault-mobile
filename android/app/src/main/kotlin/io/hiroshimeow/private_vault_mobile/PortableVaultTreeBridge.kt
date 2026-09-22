@@ -16,6 +16,7 @@ class PortableVaultTreeBridge(
 ) {
     private val channel = MethodChannel(messenger, CHANNEL_NAME)
     private var pendingPickResult: MethodChannel.Result? = null
+    private var disposed = false
     private val nextWriteHandle = AtomicLong(1)
     private val pendingWrites = mutableMapOf<Long, PendingWrite>()
 
@@ -284,6 +285,33 @@ class PortableVaultTreeBridge(
             stream.close()
         } catch (_: Exception) {
             // Best effort cleanup.
+        }
+    }
+
+    fun dispose() {
+        if (disposed) return
+        disposed = true
+        channel.setMethodCallHandler(null)
+
+        val writes = pendingWrites.values.toList()
+        pendingWrites.clear()
+        for (pending in writes) {
+            closeQuietly(pending.stream)
+            pending.temporary.delete()
+        }
+
+        val pickResult = pendingPickResult
+        pendingPickResult = null
+        if (pickResult != null) {
+            try {
+                pickResult.error(
+                    "bridge_disposed",
+                    "Portable Vault picker was interrupted by activity teardown",
+                    null,
+                )
+            } catch (_: Exception) {
+                // Flutter engine may already be detached.
+            }
         }
     }
 
