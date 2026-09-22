@@ -3,6 +3,7 @@ import 'dart:typed_data';
 
 import 'package:cryptography/cryptography.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:image/image.dart' as img;
 import 'package:private_vault_mobile/core/crypto/vault_crypto.dart';
 import 'package:private_vault_mobile/features/media/media_vault_service.dart';
 import 'package:private_vault_mobile/features/vault/vault_repository.dart';
@@ -45,6 +46,47 @@ class RecordingStreamingRepository implements StreamingVaultRepository {
 
   @override
   Future<Uint8List> readBytes(String id) async => Uint8List(0);
+}
+
+class ThumbnailRecordingRepository
+    implements VaultRepository, VaultThumbnailRepository {
+  final Map<String, Uint8List> payloads = {};
+  final Map<String, Uint8List> thumbnails = {};
+  var _nextId = 0;
+
+  @override
+  Future<VaultItem> addBytes(
+    Uint8List bytes, {
+    required VaultItemKind kind,
+  }) async {
+    final id = 'item-${_nextId++}';
+    payloads[id] = Uint8List.fromList(bytes);
+    return VaultItem(
+      id: id,
+      kind: kind,
+      createdAt: DateTime.fromMillisecondsSinceEpoch(0, isUtc: true),
+    );
+  }
+
+  @override
+  Future<void> delete(String id) async {
+    payloads.remove(id);
+    thumbnails.remove(id);
+  }
+
+  @override
+  Future<List<VaultItem>> list() async => const [];
+
+  @override
+  Future<Uint8List> readBytes(String id) async => payloads[id]!;
+
+  @override
+  Future<Uint8List?> readThumbnail(String id) async => thumbnails[id];
+
+  @override
+  Future<void> writeThumbnail(String id, Uint8List bytes) async {
+    thumbnails[id] = Uint8List.fromList(bytes);
+  }
 }
 
 class MemoryVaultKeyStore implements VaultKeyStore {
@@ -99,6 +141,30 @@ void main() {
           .readAsString()),
       isNot(contains('picked-secret')),
     );
+  });
+
+  test('image import stores a bounded thumbnail cache', () async {
+    final repository = ThumbnailRecordingRepository();
+    final original = img.Image(width: 800, height: 400);
+    final originalBytes = Uint8List.fromList(img.encodePng(original));
+    final service = MediaVaultService(
+      repository: repository,
+      pickImport: () async =>
+          PickedVaultData(bytes: originalBytes, kind: VaultItemKind.image),
+      capturePhoto: () async => null,
+      saveExport: (_, _) async => true,
+    );
+
+    final item = await service.importFile();
+
+    expect(item, isNotNull);
+    final thumbnailBytes = repository.thumbnails[item!.id];
+    expect(thumbnailBytes, isNotNull);
+    final thumbnail = img.decodeImage(thumbnailBytes!);
+    expect(thumbnail, isNotNull);
+    expect(thumbnail!.width, lessThanOrEqualTo(384));
+    expect(thumbnail.height, lessThan(original.height));
+    expect(repository.payloads[item.id], originalBytes);
   });
 
   test('multi import loads and commits selected files sequentially', () async {

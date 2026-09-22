@@ -227,11 +227,73 @@ void main() {
     },
   );
 
-  test('delete removes payload and encrypted listing metadata', () async {
+  test(
+    'encrypted thumbnail cache round trips without touching payload',
+    () async {
+      final repo = await repository('0000');
+      final added = await repo.addBytes(
+        Uint8List.fromList([10, 20, 30]),
+        kind: VaultItemKind.image,
+      );
+      final thumbnailBytes = Uint8List.fromList([
+        0xff,
+        0xd8,
+        1,
+        2,
+        3,
+        0xff,
+        0xd9,
+      ]);
+
+      await repo.writeThumbnail(added.id, thumbnailBytes);
+
+      expect(await repo.readThumbnail(added.id), thumbnailBytes);
+      final material = repo.session.requireMaterial();
+      final thumbnail = File(
+        '${root.path}${Platform.pathSeparator}${material.namespaceId}'
+        '${Platform.pathSeparator}objects${Platform.pathSeparator}'
+        '${added.id}.pvt',
+      );
+      expect(await thumbnail.exists(), isTrue);
+      expect(await thumbnail.readAsBytes(), isNot(contains(thumbnailBytes)));
+      expect(await repo.readBytes(added.id), Uint8List.fromList([10, 20, 30]));
+    },
+  );
+
+  test('corrupt thumbnail is discarded as cache miss', () async {
+    final repo = await repository('0000');
+    final added = await repo.addBytes(
+      Uint8List.fromList([5, 6, 7]),
+      kind: VaultItemKind.image,
+    );
+    await repo.writeThumbnail(
+      added.id,
+      Uint8List.fromList([0xff, 0xd8, 9, 8, 7, 0xff, 0xd9]),
+    );
+    final material = repo.session.requireMaterial();
+    final thumbnail = File(
+      '${root.path}${Platform.pathSeparator}${material.namespaceId}'
+      '${Platform.pathSeparator}objects${Platform.pathSeparator}'
+      '${added.id}.pvt',
+    );
+    final bytes = await thumbnail.readAsBytes();
+    bytes[bytes.length - 1] ^= 1;
+    await thumbnail.writeAsBytes(bytes, flush: true);
+
+    expect(await repo.readThumbnail(added.id), isNull);
+    expect(await thumbnail.exists(), isFalse);
+    expect(await repo.readBytes(added.id), Uint8List.fromList([5, 6, 7]));
+  });
+
+  test('delete removes payload, metadata, and thumbnail cache', () async {
     final repo = await repository('0000');
     final added = await repo.addBytes(
       Uint8List.fromList([7]),
-      kind: VaultItemKind.document,
+      kind: VaultItemKind.image,
+    );
+    await repo.writeThumbnail(
+      added.id,
+      Uint8List.fromList([0xff, 0xd8, 7, 0xff, 0xd9]),
     );
     final material = repo.session.requireMaterial();
     final objects = Directory(
@@ -244,13 +306,18 @@ void main() {
     final metadata = File(
       '${objects.path}${Platform.pathSeparator}${added.id}.pvm',
     );
+    final thumbnail = File(
+      '${objects.path}${Platform.pathSeparator}${added.id}.pvt',
+    );
     expect(await payload.exists(), isTrue);
     expect(await metadata.exists(), isTrue);
+    expect(await thumbnail.exists(), isTrue);
 
     await repo.delete(added.id);
 
     expect(await payload.exists(), isFalse);
     expect(await metadata.exists(), isFalse);
+    expect(await thumbnail.exists(), isFalse);
   });
 
   test('closed session cannot read vault', () async {

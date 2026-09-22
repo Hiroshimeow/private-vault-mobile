@@ -1,9 +1,11 @@
 import 'dart:async';
 import 'dart:io';
+import 'dart:isolate';
 import 'dart:typed_data';
 
 import 'package:android_file_picker/android_file_picker.dart';
 import 'package:file_picker/file_picker.dart';
+import 'package:image/image.dart' as img;
 import 'package:image_picker/image_picker.dart';
 import 'package:private_vault_mobile/features/vault/vault_repository.dart';
 import 'package:private_vault_mobile/platform/media_source_bridge.dart';
@@ -21,12 +23,14 @@ class PickedVaultSource {
     required this.kind,
     required this.openRead,
     this.deleteSource,
+    this.buildThumbnail,
   });
 
   final String name;
   final VaultItemKind kind;
   final Stream<List<int>> Function() openRead;
   final Future<void> Function()? deleteSource;
+  final Future<Uint8List?> Function()? buildThumbnail;
 }
 
 class VaultImportFailure {
@@ -104,7 +108,14 @@ class MediaVaultService {
   Future<VaultItem?> importFile() async {
     final picked = await _pickImport();
     if (picked == null) return null;
-    return _repository.addBytes(picked.bytes, kind: picked.kind);
+    final item = await _repository.addBytes(picked.bytes, kind: picked.kind);
+    await _cacheThumbnail(
+      item,
+      picked.kind == VaultItemKind.image
+          ? () => Isolate.run(() => _buildImageThumbnail(picked.bytes))
+          : null,
+    );
+    return item;
   }
 
   Future<VaultImportBatchResult> importFiles({
@@ -163,21 +174,57 @@ class MediaVaultService {
 
   Future<VaultItem> _importSource(PickedVaultSource source) async {
     final repository = _repository;
+    final VaultItem item;
     if (repository is StreamingVaultRepository) {
-      return repository.addStream(source.openRead(), kind: source.kind);
+      item = await repository.addStream(source.openRead(), kind: source.kind);
+    } else {
+      final builder = BytesBuilder(copy: false);
+      await for (final chunk in source.openRead()) {
+        if (chunk.isNotEmpty) builder.add(chunk);
+      }
+      item = await repository.addBytes(builder.takeBytes(), kind: source.kind);
     }
+    await _cacheThumbnail(item, source.buildThumbnail);
+    return item;
+  }
 
-    final builder = BytesBuilder(copy: false);
-    await for (final chunk in source.openRead()) {
-      if (chunk.isNotEmpty) builder.add(chunk);
+  Future<void> _cacheThumbnail(
+    VaultItem item,
+    Future<Uint8List?> Function()? buildThumbnail,
+  ) async {
+    final repository = _repository;
+    if (repository is! VaultThumbnailRepository || buildThumbnail == null) {
+      return;
     }
-    return repository.addBytes(builder.takeBytes(), kind: source.kind);
+    try {
+      final thumbnail = await buildThumbnail();
+      if (thumbnail != null && thumbnail.isNotEmpty) {
+        await repository.writeThumbnail(item.id, thumbnail);
+      }
+    } on Object {
+      // Thumbnail data is a reconstructible cache; import success is authoritative.
+    }
+  }
+
+  Future<void> cacheImageThumbnail(VaultItem item, Uint8List bytes) async {
+    if (item.kind != VaultItemKind.image) return;
+    await _cacheThumbnail(
+      item,
+      () => Isolate.run(() => _buildImageThumbnail(bytes)),
+    );
   }
 
   Future<VaultItem?> capturePhoto() async {
     final picked = await _capturePhoto();
     if (picked == null) return null;
-    return _repository.addBytes(picked.bytes, kind: picked.kind);
+    final item = await _repository.addBytes(picked.bytes, kind: picked.kind);
+    await _cacheThumbnail(
+      item,
+      picked.kind == VaultItemKind.image
+          ? () => Isolate.run(() => _buildImageThumbnail(picked.bytes))
+          : null,
+    );
+    return item;
   }
 
   Future<bool> export(String id, {required String fileName}) async {
@@ -218,6 +265,12 @@ class MediaVaultService {
           name: file.name,
           kind: _kindFromName(file.name),
           openRead: () => file.readAsByteStream(),
+          buildThumbnail: _kindFromName(file.name) == VaultItemKind.image
+              ? () async {
+                  final bytes = Uint8List.fromList(await file.readAsBytes());
+                  return Isolate.run(() => _buildImageThumbnail(bytes));
+                }
+              : null,
           deleteSource: () {
             final uri = file is AndroidPlatformFile
                 ? file.safHandle?.uri ?? file.uri
@@ -254,6 +307,17 @@ class MediaVaultService {
   static Future<bool> saveDeviceExport(String fileName, Uint8List bytes) async {
     final uri = await FilePicker.saveFile(fileName: fileName, bytes: bytes);
     return uri != null;
+  }
+
+  static Uint8List? _buildImageThumbnail(Uint8List bytes) {
+    final decoded = img.decodeImage(bytes);
+    if (decoded == null) return null;
+    final oriented = img.bakeOrientation(decoded);
+    final width = oriented.width > 384 ? 384 : oriented.width;
+    final thumbnail = width == oriented.width
+        ? oriented
+        : img.copyResize(oriented, width: width);
+    return Uint8List.fromList(img.encodeJpg(thumbnail, quality: 78));
   }
 
   static VaultItemKind _kindFromName(String name) {

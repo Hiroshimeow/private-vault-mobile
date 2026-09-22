@@ -66,7 +66,7 @@ metadata_length_u32_be || metadata_utf8_json || payload
 Metadata keys:
 
 - `v`: integer 2.
-- `name`: object ID plus `.bin`; repository verifies it matches the `.pvb` filename.
+- `name`: authenticated logical object name. Payload `.pvb` uses `<object_id>.bin`; listing sidecar `.pvm` uses `<object_id>.meta`; thumbnail cache `.pvt` uses `<object_id>.thumb`. The repository verifies the expected role/name pairing.
 - `type`: media type.
 - `created`: UTC Unix epoch milliseconds.
 - `namespace`: 32-character namespace ID; repository verifies it equals the open PIN session namespace.
@@ -81,9 +81,12 @@ Object ID and namespace identity are therefore inside the authenticated plaintex
     objects/
       <object_id>.pvb
       <object_id>.pvm
+      <object_id>.pvt
 ```
 
 `<object_id>.pvb` is the authoritative encrypted payload object. `<object_id>.pvm` is an encrypted listing-metadata sidecar using the same V2 envelope/profile, with authenticated `name = <object_id>.meta`, the same media type/creation time/namespace, and an empty payload. Gallery/list operations read the small `.pvm` sidecar instead of decrypting the full payload. If a sidecar is missing or invalid, implementations may rebuild it from the authenticated `.pvb` payload; the payload remains authoritative.
+
+`<object_id>.pvt` is an optional, reconstructible encrypted image-thumbnail cache. It uses the same V2 envelope/profile with authenticated `name = <object_id>.thumb`, `type = image/jpeg`, the same namespace and creation time, and a bounded JPEG thumbnail payload. Gallery scrolling may decrypt `.pvt`, but must not decrypt the authoritative `.pvb` merely to populate a tile. Missing, corrupt, or unsupported `.pvt` data is treated as a cache miss and may be deleted/rebuilt without changing the authoritative payload.
 
 Multiple PIN identities coexist under one selected portable root. Switching PIN selects another namespace; it does not re-key or delete prior namespaces.
 

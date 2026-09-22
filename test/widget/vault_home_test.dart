@@ -2,11 +2,12 @@ import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:image/image.dart' as img;
 import 'package:private_vault_mobile/features/media/media_vault_service.dart';
 import 'package:private_vault_mobile/features/vault/vault_home.dart';
 import 'package:private_vault_mobile/features/vault/vault_repository.dart';
 
-class FakeVaultRepository implements VaultRepository {
+class FakeVaultRepository implements VaultRepository, VaultThumbnailRepository {
   FakeVaultRepository({this.failList = false}) {
     final item = VaultItem(
       id: 'fixture-item',
@@ -19,9 +20,11 @@ class FakeVaultRepository implements VaultRepository {
 
   final items = <VaultItem>[];
   final bytesById = <String, Uint8List>{};
+  final thumbnailsById = <String, Uint8List>{};
   final bool failList;
   VaultItemKind? lastAddedKind;
   Uint8List? lastAddedBytes;
+  int readBytesCalls = 0;
 
   @override
   Future<VaultItem> addBytes(
@@ -44,6 +47,7 @@ class FakeVaultRepository implements VaultRepository {
   Future<void> delete(String id) async {
     items.removeWhere((item) => item.id == id);
     bytesById.remove(id);
+    thumbnailsById.remove(id);
   }
 
   @override
@@ -53,7 +57,18 @@ class FakeVaultRepository implements VaultRepository {
   }
 
   @override
-  Future<Uint8List> readBytes(String id) async => bytesById[id]!;
+  Future<Uint8List> readBytes(String id) async {
+    readBytesCalls += 1;
+    return bytesById[id]!;
+  }
+
+  @override
+  Future<Uint8List?> readThumbnail(String id) async => thumbnailsById[id];
+
+  @override
+  Future<void> writeThumbnail(String id, Uint8List bytes) async {
+    thumbnailsById[id] = Uint8List.fromList(bytes);
+  }
 }
 
 void main() {
@@ -249,6 +264,102 @@ void main() {
 
     expect(sourceDeleted, isTrue);
     expect(find.text('Moved 1 item(s).'), findsOneWidget);
+  });
+
+  testWidgets(
+    'gallery uses encrypted thumbnail cache before original payload',
+    (tester) async {
+      final repository = FakeVaultRepository();
+      final originalBytes = Uint8List.fromList(
+        img.encodePng(img.Image(width: 8, height: 8)),
+      );
+      final item = await repository.addBytes(
+        originalBytes,
+        kind: VaultItemKind.image,
+      );
+      final thumbnailBytes = Uint8List.fromList(
+        img.encodeJpg(img.Image(width: 2, height: 2)),
+      );
+      await repository.writeThumbnail(item.id, thumbnailBytes);
+      final media = MediaVaultService(
+        repository: repository,
+        pickImport: () async => null,
+        capturePhoto: () async => null,
+        saveExport: (_, _) async => true,
+      );
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: VaultHome(
+              repository: repository,
+              media: media,
+              confirmExport: true,
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.byKey(Key('vault-thumbnail-${item.id}')), findsOneWidget);
+      expect(repository.readBytesCalls, 0);
+
+      await tester.tap(find.byKey(Key('vault-tile-${item.id}')));
+      await tester.pumpAndSettle();
+
+      expect(find.byKey(const Key('vault-fullscreen-image')), findsOneWidget);
+      expect(find.byType(InteractiveViewer), findsOneWidget);
+      expect(find.byKey(const Key('vault-image-export')), findsOneWidget);
+      expect(find.byKey(const Key('vault-image-delete')), findsOneWidget);
+      expect(repository.readBytesCalls, 1);
+    },
+  );
+
+  testWidgets('gallery long press enables multi-select bulk actions', (
+    tester,
+  ) async {
+    final repository = FakeVaultRepository();
+    final second = await repository.addBytes(
+      Uint8List.fromList('second'.codeUnits),
+      kind: VaultItemKind.note,
+    );
+    final media = MediaVaultService(
+      repository: repository,
+      pickImport: () async => null,
+      capturePhoto: () async => null,
+      saveExport: (_, _) async => true,
+    );
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: VaultHome(
+            repository: repository,
+            media: media,
+            confirmExport: true,
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.longPress(find.byKey(const Key('vault-tile-fixture-item')));
+    await tester.pump();
+    expect(find.text('1 selected'), findsOneWidget);
+    expect(find.byKey(const Key('vault-selection-export')), findsOneWidget);
+    expect(find.byKey(const Key('vault-selection-delete')), findsOneWidget);
+
+    await tester.tap(find.byKey(Key('vault-tile-${second.id}')));
+    await tester.pump();
+    expect(find.text('2 selected'), findsOneWidget);
+
+    await tester.tap(find.byKey(const Key('vault-selection-delete')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.widgetWithText(FilledButton, 'Delete'));
+    await tester.pumpAndSettle();
+
+    expect(repository.items, isEmpty);
+    expect(find.byKey(const Key('vault-selection-count')), findsNothing);
   });
 
   testWidgets('list failure shows only the load error state', (tester) async {

@@ -98,6 +98,11 @@ abstract interface class StreamingVaultRepository implements VaultRepository {
   });
 }
 
+abstract interface class VaultThumbnailRepository implements VaultRepository {
+  Future<Uint8List?> readThumbnail(String id);
+  Future<void> writeThumbnail(String id, Uint8List bytes);
+}
+
 abstract interface class VaultScanAwareRepository implements VaultRepository {
   Future<VaultScanResult> scan();
 }

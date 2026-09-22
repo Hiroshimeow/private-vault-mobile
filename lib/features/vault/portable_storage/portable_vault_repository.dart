@@ -13,7 +13,8 @@ class PortableVaultRepository
     implements
         VaultScanAwareRepository,
         PinSessionVaultRepository,
-        StreamingVaultRepository {
+        StreamingVaultRepository,
+        VaultThumbnailRepository {
   PortableVaultRepository({
     required this.storage,
     required this.session,
@@ -152,6 +153,69 @@ class PortableVaultRepository
   }
 
   @override
+  Future<Uint8List?> readThumbnail(String id) async {
+    await _requireAccess();
+    final material = session.requireMaterial();
+    try {
+      final encoded = await storage.read(
+        _thumbnailPath(material.namespaceId, id),
+      );
+      final thumbnail = await objectCodec.decode(
+        encoded,
+        material.encryptionKey,
+      );
+      if (thumbnail.namespaceId != material.namespaceId ||
+          thumbnail.fileName != '$id.thumb' ||
+          thumbnail.mediaType != 'image/jpeg' ||
+          thumbnail.bytes.isEmpty) {
+        throw const PortableVaultFormatException();
+      }
+      return thumbnail.bytes;
+    } on PortableVaultStorageNotFoundException {
+      return null;
+    } on PortableVaultUnsupportedProfileException {
+      await _deleteThumbnailBestEffort(material.namespaceId, id);
+      return null;
+    } on VaultIntegrityException {
+      await _deleteThumbnailBestEffort(material.namespaceId, id);
+      return null;
+    } on PortableVaultFormatException {
+      await _deleteThumbnailBestEffort(material.namespaceId, id);
+      return null;
+    }
+  }
+
+  @override
+  Future<void> writeThumbnail(String id, Uint8List bytes) async {
+    if (bytes.isEmpty) return;
+    await _requireAccess();
+    final material = session.requireMaterial();
+    final metadataEncoded = await storage.read(
+      _metadataPath(material.namespaceId, id),
+    );
+    final metadata = await objectCodec.decode(
+      metadataEncoded,
+      material.encryptionKey,
+    );
+    _validateMetadataIdentity(
+      metadata,
+      expectedNamespace: material.namespaceId,
+      expectedId: id,
+    );
+    final encoded = await objectCodec.encode(
+      PortableVaultObject(
+        fileName: '$id.thumb',
+        mediaType: 'image/jpeg',
+        createdAtMillis: metadata.createdAtMillis,
+        namespaceId: material.namespaceId,
+        bytes: bytes,
+      ),
+      material.encryptionKey,
+    );
+    await storage.write(_thumbnailPath(material.namespaceId, id), encoded);
+  }
+
+  @override
   Future<List<VaultItem>> list() async {
     final result = await scan();
     if (result.hasProblems) throw VaultScanException(result);
@@ -232,6 +296,7 @@ class PortableVaultRepository
   Future<void> delete(String id) async {
     await _requireAccess();
     final material = session.requireMaterial();
+    await storage.delete(_thumbnailPath(material.namespaceId, id));
     await storage.delete(_metadataPath(material.namespaceId, id));
     await storage.delete(_objectPath(material.namespaceId, id));
   }
@@ -351,6 +416,17 @@ class PortableVaultRepository
 
   String _metadataPath(String namespaceId, String id) =>
       '$namespaceId/objects/$id.pvm';
+
+  String _thumbnailPath(String namespaceId, String id) =>
+      '$namespaceId/objects/$id.pvt';
+
+  Future<void> _deleteThumbnailBestEffort(String namespaceId, String id) async {
+    try {
+      await storage.delete(_thumbnailPath(namespaceId, id));
+    } on Object {
+      // Thumbnail cache is reconstructible; preserve the primary read result.
+    }
+  }
 
   String _newId() {
     final random = Random.secure();

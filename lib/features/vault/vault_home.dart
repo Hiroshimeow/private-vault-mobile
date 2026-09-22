@@ -31,11 +31,20 @@ class _VaultHomeState extends State<VaultHome> {
   String? _error;
   String? _warning;
   VaultImportProgress? _importProgress;
+  final Map<String, Future<Uint8List?>> _thumbnailFutures = {};
+  final Set<String> _selectedIds = {};
 
   @override
   void initState() {
     super.initState();
     _reload();
+  }
+
+  @override
+  void dispose() {
+    _thumbnailFutures.clear();
+    _selectedIds.clear();
+    super.dispose();
   }
 
   Future<void> _reload() async {
@@ -90,6 +99,115 @@ class _VaultHomeState extends State<VaultHome> {
         _error = 'Protected items could not be loaded.';
       });
     }
+  }
+
+  Future<Uint8List?>? _thumbnailFor(VaultItem item) {
+    if (item.kind != VaultItemKind.image) return null;
+    final repository = widget.repository;
+    if (repository is! VaultThumbnailRepository) return null;
+    return _thumbnailFutures.putIfAbsent(
+      item.id,
+      () => repository.readThumbnail(item.id),
+    );
+  }
+
+  void _toggleSelection(VaultItem item) {
+    setState(() {
+      if (!_selectedIds.add(item.id)) {
+        _selectedIds.remove(item.id);
+      }
+    });
+  }
+
+  void _clearSelection() {
+    if (_selectedIds.isEmpty) return;
+    setState(_selectedIds.clear);
+  }
+
+  Future<void> _deleteSelected() async {
+    if (_selectedIds.isEmpty) return;
+    final count = _selectedIds.length;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      useRootNavigator: false,
+      builder: (context) => AlertDialog(
+        title: Text('Delete $count protected item(s)?'),
+        content: const Text(
+          'This removes the selected Vault copies. Flash storage does not guarantee forensic secure erase.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Delete'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+
+    final ids = List<String>.from(_selectedIds);
+    for (final id in ids) {
+      await widget.repository.delete(id);
+      _thumbnailFutures.remove(id);
+    }
+    _clearSelection();
+    await _reload();
+  }
+
+  Future<void> _exportSelected() async {
+    if (_selectedIds.isEmpty) return;
+    if (widget.confirmExport) {
+      final confirmed = await showDialog<bool>(
+        context: context,
+        useRootNavigator: false,
+        builder: (context) => AlertDialog(
+          title: Text('Export ${_selectedIds.length} protected item(s)?'),
+          content: const Text(
+            'Exported copies leave protected app storage and may be visible to other apps.',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(context, true),
+              child: const Text('Export'),
+            ),
+          ],
+        ),
+      );
+      if (confirmed != true) return;
+    }
+
+    final items = _items
+        .where((item) => _selectedIds.contains(item.id))
+        .toList(growable: false);
+    var exported = 0;
+    widget.onSystemHandoffChanged?.call(true);
+    try {
+      for (final item in items) {
+        if (await widget.media.export(
+          item.id,
+          fileName: 'private-item-${item.id.substring(0, 8)}.bin',
+        )) {
+          exported += 1;
+        }
+      }
+    } finally {
+      widget.onSystemHandoffChanged?.call(false);
+    }
+    if (!mounted) return;
+    _clearSelection();
+    ScaffoldMessenger.of(context)
+      ..clearSnackBars()
+      ..showSnackBar(
+        SnackBar(content: Text('Exported $exported/${items.length} item(s).')),
+      );
   }
 
   Future<void> _chooseImportMode() async {
@@ -218,20 +336,40 @@ class _VaultHomeState extends State<VaultHome> {
 
   Future<void> _open(VaultItem item) async {
     try {
+      final cachedThumbnail = item.kind == VaultItemKind.image
+          ? await _thumbnailFor(item)
+          : null;
       final bytes = await widget.repository.readBytes(item.id);
       if (!mounted) return;
-      await showModalBottomSheet<void>(
-        context: context,
-        useRootNavigator: false,
-        isScrollControlled: true,
-        showDragHandle: true,
-        builder: (context) => _VaultPreview(
-          item: item,
-          bytes: bytes,
-          onExport: () => _confirmExport(item),
-          onDelete: () => _confirmDelete(item),
-        ),
-      );
+      if (item.kind == VaultItemKind.image && cachedThumbnail == null) {
+        await widget.media.cacheImageThumbnail(item, bytes);
+        _thumbnailFutures.remove(item.id);
+      }
+      if (!mounted) return;
+      if (item.kind == VaultItemKind.image) {
+        await Navigator.of(context).push<void>(
+          MaterialPageRoute(
+            builder: (_) => _FullScreenImagePreview(
+              bytes: bytes,
+              onExport: () => _confirmExport(item),
+              onDelete: () => _confirmDelete(item),
+            ),
+          ),
+        );
+      } else {
+        await showModalBottomSheet<void>(
+          context: context,
+          useRootNavigator: false,
+          isScrollControlled: true,
+          showDragHandle: true,
+          builder: (context) => _VaultPreview(
+            item: item,
+            bytes: bytes,
+            onExport: () => _confirmExport(item),
+            onDelete: () => _confirmDelete(item),
+          ),
+        );
+      }
       if (item.kind == VaultItemKind.unknown && mounted) {
         await _reload();
       }
@@ -377,20 +515,50 @@ class _VaultHomeState extends State<VaultHome> {
         ),
         Padding(
           padding: const EdgeInsets.fromLTRB(20, 8, 20, 4),
-          child: Row(
-            children: [
-              Expanded(
-                child: Text(
-                  'Protected items',
-                  style: Theme.of(context).textTheme.titleMedium,
+          child: _selectedIds.isEmpty
+              ? Row(
+                  children: [
+                    Expanded(
+                      child: Text(
+                        'Protected items',
+                        style: Theme.of(context).textTheme.titleMedium,
+                      ),
+                    ),
+                    Text(
+                      '${_items.length} items',
+                      style: Theme.of(context).textTheme.bodySmall,
+                    ),
+                  ],
+                )
+              : Row(
+                  children: [
+                    Expanded(
+                      child: Text(
+                        '${_selectedIds.length} selected',
+                        key: const Key('vault-selection-count'),
+                        style: Theme.of(context).textTheme.titleMedium,
+                      ),
+                    ),
+                    IconButton(
+                      key: const Key('vault-selection-export'),
+                      tooltip: 'Export selected',
+                      onPressed: _exportSelected,
+                      icon: const Icon(Icons.ios_share_outlined),
+                    ),
+                    IconButton(
+                      key: const Key('vault-selection-delete'),
+                      tooltip: 'Delete selected',
+                      onPressed: _deleteSelected,
+                      icon: const Icon(Icons.delete_outline),
+                    ),
+                    IconButton(
+                      key: const Key('vault-selection-clear'),
+                      tooltip: 'Clear selection',
+                      onPressed: _clearSelection,
+                      icon: const Icon(Icons.close),
+                    ),
+                  ],
                 ),
-              ),
-              Text(
-                '${_items.length} items',
-                style: Theme.of(context).textTheme.bodySmall,
-              ),
-            ],
-          ),
         ),
         if (_warning != null)
           Padding(
@@ -448,12 +616,18 @@ class _VaultHomeState extends State<VaultHome> {
                           itemCount: _items.length,
                           itemBuilder: (context, index) {
                             final item = _items[index];
+                            final selected = _selectedIds.contains(item.id);
                             return _VaultGridTile(
                               item: item,
                               icon: _iconFor(item.kind),
                               label: _labelFor(item.kind),
                               timestamp: _shortTimestamp(item.createdAt),
-                              onTap: () => _open(item),
+                              thumbnail: _thumbnailFor(item),
+                              selected: selected,
+                              onTap: () => _selectedIds.isEmpty
+                                  ? _open(item)
+                                  : _toggleSelection(item),
+                              onLongPress: () => _toggleSelection(item),
                             );
                           },
                         );
@@ -496,31 +670,81 @@ class _VaultGridTile extends StatelessWidget {
     required this.icon,
     required this.label,
     required this.timestamp,
+    required this.thumbnail,
+    required this.selected,
     required this.onTap,
+    required this.onLongPress,
   });
 
   final VaultItem item;
   final IconData icon;
   final String label;
   final String timestamp;
+  final Future<Uint8List?>? thumbnail;
+  final bool selected;
   final VoidCallback onTap;
+  final VoidCallback onLongPress;
 
   @override
   Widget build(BuildContext context) {
     final colors = Theme.of(context).colorScheme;
+    Widget fallback() =>
+        Center(child: Icon(icon, size: 42, color: colors.onSurfaceVariant));
+
     return Card(
       clipBehavior: Clip.antiAlias,
       child: InkWell(
+        key: Key('vault-tile-${item.id}'),
         onTap: onTap,
+        onLongPress: onLongPress,
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             Expanded(
-              child: ColoredBox(
-                color: colors.surfaceContainerHighest,
-                child: Center(
-                  child: Icon(icon, size: 42, color: colors.onSurfaceVariant),
-                ),
+              child: Stack(
+                fit: StackFit.expand,
+                children: [
+                  ColoredBox(
+                    color: colors.surfaceContainerHighest,
+                    child: thumbnail == null
+                        ? fallback()
+                        : FutureBuilder<Uint8List?>(
+                            future: thumbnail,
+                            builder: (context, snapshot) {
+                              final bytes = snapshot.data;
+                              if (bytes == null || bytes.isEmpty) {
+                                return fallback();
+                              }
+                              return Image.memory(
+                                bytes,
+                                key: Key('vault-thumbnail-${item.id}'),
+                                fit: BoxFit.cover,
+                                gaplessPlayback: true,
+                                errorBuilder: (_, _, _) => fallback(),
+                              );
+                            },
+                          ),
+                  ),
+                  if (selected)
+                    Positioned(
+                      top: 8,
+                      right: 8,
+                      child: DecoratedBox(
+                        decoration: BoxDecoration(
+                          color: colors.primaryContainer,
+                          shape: BoxShape.circle,
+                        ),
+                        child: Padding(
+                          padding: const EdgeInsets.all(5),
+                          child: Icon(
+                            Icons.check,
+                            size: 18,
+                            color: colors.onPrimaryContainer,
+                          ),
+                        ),
+                      ),
+                    ),
+                ],
               ),
             ),
             Padding(
@@ -542,6 +766,58 @@ class _VaultGridTile extends StatelessWidget {
               ),
             ),
           ],
+        ),
+      ),
+    );
+  }
+}
+
+class _FullScreenImagePreview extends StatelessWidget {
+  const _FullScreenImagePreview({
+    required this.bytes,
+    required this.onExport,
+    required this.onDelete,
+  });
+
+  final Uint8List bytes;
+  final VoidCallback onExport;
+  final VoidCallback onDelete;
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: Colors.black,
+      appBar: AppBar(
+        backgroundColor: Colors.black,
+        foregroundColor: Colors.white,
+        actions: [
+          IconButton(
+            key: const Key('vault-image-export'),
+            tooltip: 'Export image',
+            onPressed: onExport,
+            icon: const Icon(Icons.ios_share_outlined),
+          ),
+          IconButton(
+            key: const Key('vault-image-delete'),
+            tooltip: 'Delete image',
+            onPressed: onDelete,
+            icon: const Icon(Icons.delete_outline),
+          ),
+        ],
+      ),
+      body: Center(
+        child: InteractiveViewer(
+          minScale: 1,
+          maxScale: 5,
+          child: Image.memory(
+            bytes,
+            key: const Key('vault-fullscreen-image'),
+            fit: BoxFit.contain,
+            errorBuilder: (_, _, _) => const Text(
+              'Image data could not be displayed.',
+              style: TextStyle(color: Colors.white),
+            ),
+          ),
         ),
       ),
     );
