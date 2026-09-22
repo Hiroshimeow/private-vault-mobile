@@ -9,6 +9,18 @@ class PlatformMediaSourceBridge {
 
   final MethodChannel channel;
 
+  Future<Uint8List?> videoThumbnail(Uri uri) async {
+    if (!Platform.isAndroid) return null;
+    if (uri.scheme != 'content' && uri.scheme != 'file') return null;
+    try {
+      return await channel.invokeMethod<Uint8List>('videoThumbnail', {
+        'uri': uri.toString(),
+      });
+    } on PlatformException {
+      return null;
+    }
+  }
+
   Future<void> delete(Uri uri) async {
     if (uri.scheme == 'file') {
       final file = File.fromUri(uri);

@@ -3,10 +3,13 @@ package io.hiroshimeow.private_vault_mobile
 import android.content.ComponentName
 import android.content.ContentResolver
 import android.content.pm.PackageManager
+import android.graphics.Bitmap
+import android.media.MediaMetadataRetriever
 import android.net.Uri
 import android.os.Bundle
 import android.provider.DocumentsContract
 import android.view.WindowManager
+import java.io.ByteArrayOutputStream
 import io.flutter.embedding.android.FlutterFragmentActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
@@ -65,6 +68,20 @@ class MainActivity : FlutterFragmentActivity() {
                             }
                         }
                     }
+                    "videoThumbnail" -> {
+                        val rawUri = call.argument<String>("uri")
+                        if (rawUri == null) {
+                            result.error("invalid_uri", "Missing video URI", null)
+                        } else {
+                            try {
+                                result.success(videoThumbnail(rawUri))
+                            } catch (error: SecurityException) {
+                                result.error("permission_denied", error.message, null)
+                            } catch (error: Exception) {
+                                result.error("thumbnail_failed", error.message, null)
+                            }
+                        }
+                    }
                     else -> result.notImplemented()
                 }
             }
@@ -86,6 +103,45 @@ class MainActivity : FlutterFragmentActivity() {
             "Only content URIs can be deleted through Android SAF"
         }
         return DocumentsContract.deleteDocument(contentResolver, uri)
+    }
+
+    private fun videoThumbnail(rawUri: String): ByteArray? {
+        val uri = Uri.parse(rawUri)
+        val retriever = MediaMetadataRetriever()
+        try {
+            when (uri.scheme) {
+                ContentResolver.SCHEME_CONTENT -> retriever.setDataSource(this, uri)
+                ContentResolver.SCHEME_FILE -> {
+                    val path = uri.path ?: return null
+                    retriever.setDataSource(path)
+                }
+                else -> return null
+            }
+            val frame = retriever.getFrameAtTime(
+                1_000_000L,
+                MediaMetadataRetriever.OPTION_CLOSEST_SYNC,
+            ) ?: retriever.getFrameAtTime(
+                -1L,
+                MediaMetadataRetriever.OPTION_CLOSEST_SYNC,
+            ) ?: return null
+            val scaled = if (frame.width > 384) {
+                val targetHeight = (frame.height * (384.0 / frame.width))
+                    .toInt()
+                    .coerceAtLeast(1)
+                Bitmap.createScaledBitmap(frame, 384, targetHeight, true)
+            } else {
+                frame
+            }
+            return ByteArrayOutputStream().use { output ->
+                scaled.compress(Bitmap.CompressFormat.JPEG, 78, output)
+                output.toByteArray()
+            }.also {
+                if (scaled !== frame) scaled.recycle()
+                frame.recycle()
+            }
+        } finally {
+            retriever.release()
+        }
     }
 
     private fun setLauncherAlias(choice: String) {

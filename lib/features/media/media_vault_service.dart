@@ -246,6 +246,7 @@ class MediaVaultService {
 
   static Future<List<PickedVaultSource>> pickDeviceFiles({
     Future<void> Function(Uri uri)? deleteUri,
+    Future<Uint8List?> Function(Uri uri)? videoThumbnail,
   }) async {
     final picked = await FilePicker.pickFiles(
       type: FileType.any,
@@ -257,28 +258,34 @@ class MediaVaultService {
         ),
       ),
     );
-    final deleteSourceUri =
-        deleteUri ?? const PlatformMediaSourceBridge().delete;
-    return [
-      for (final file in picked)
+    final mediaBridge = const PlatformMediaSourceBridge();
+    final deleteSourceUri = deleteUri ?? mediaBridge.delete;
+    final videoThumbnailLoader = videoThumbnail ?? mediaBridge.videoThumbnail;
+    final sources = <PickedVaultSource>[];
+    for (final file in picked) {
+      final kind = _kindFromName(file.name);
+      final uri = file is AndroidPlatformFile
+          ? file.safHandle?.uri ?? file.uri
+          : file.uri;
+      sources.add(
         PickedVaultSource(
           name: file.name,
-          kind: _kindFromName(file.name),
+          kind: kind,
           openRead: () => file.readAsByteStream(),
-          buildThumbnail: _kindFromName(file.name) == VaultItemKind.image
-              ? () async {
-                  final bytes = Uint8List.fromList(await file.readAsBytes());
-                  return Isolate.run(() => _buildImageThumbnail(bytes));
-                }
-              : null,
-          deleteSource: () {
-            final uri = file is AndroidPlatformFile
-                ? file.safHandle?.uri ?? file.uri
-                : file.uri;
-            return deleteSourceUri(uri);
+          buildThumbnail: switch (kind) {
+            VaultItemKind.image => () async {
+              final bytes = Uint8List.fromList(await file.readAsBytes());
+              return Isolate.run(() => _buildImageThumbnail(bytes));
+            },
+            VaultItemKind.video when Platform.isAndroid =>
+              () => videoThumbnailLoader(uri),
+            _ => null,
           },
+          deleteSource: () => deleteSourceUri(uri),
         ),
-    ];
+      );
+    }
+    return List.unmodifiable(sources);
   }
 
   static Future<PickedVaultData?> captureDevicePhoto() async {

@@ -47,6 +47,21 @@ void main() {
     expect(bridge, contains("it.contains('\\\\')"));
   });
 
+  test('Android video thumbnails are extracted from granted source URI', () {
+    final activity = File(
+      'android/app/src/main/kotlin/io/hiroshimeow/private_vault_mobile/'
+      'MainActivity.kt',
+    ).readAsStringSync();
+    final media = File('lib/features/media/media_vault_service.dart')
+        .readAsStringSync();
+
+    expect(activity, contains('"videoThumbnail"'));
+    expect(activity, contains('MediaMetadataRetriever'));
+    expect(activity, contains('Bitmap.createScaledBitmap'));
+    expect(media, contains('VaultItemKind.video when Platform.isAndroid'));
+    expect(media, contains('videoThumbnailLoader(uri)'));
+  });
+
   test('Move to Vault deletes original through granted document URI', () {
     final activity = File(
       'android/app/src/main/kotlin/io/hiroshimeow/private_vault_mobile/'

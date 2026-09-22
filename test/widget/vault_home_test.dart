@@ -21,6 +21,7 @@ class FakeVaultRepository implements VaultRepository, VaultThumbnailRepository {
   final items = <VaultItem>[];
   final bytesById = <String, Uint8List>{};
   final thumbnailsById = <String, Uint8List>{};
+  final thumbnailReadIds = <String>[];
   final bool failList;
   VaultItemKind? lastAddedKind;
   Uint8List? lastAddedBytes;
@@ -63,7 +64,10 @@ class FakeVaultRepository implements VaultRepository, VaultThumbnailRepository {
   }
 
   @override
-  Future<Uint8List?> readThumbnail(String id) async => thumbnailsById[id];
+  Future<Uint8List?> readThumbnail(String id) async {
+    thumbnailReadIds.add(id);
+    return thumbnailsById[id];
+  }
 
   @override
   Future<void> writeThumbnail(String id, Uint8List bytes) async {
@@ -314,6 +318,43 @@ void main() {
       expect(repository.readBytesCalls, 1);
     },
   );
+
+  testWidgets('gallery uses encrypted thumbnail cache for video tiles', (
+    tester,
+  ) async {
+    final repository = FakeVaultRepository();
+    final item = await repository.addBytes(
+      Uint8List.fromList([0, 1, 2, 3]),
+      kind: VaultItemKind.video,
+    );
+    await repository.writeThumbnail(
+      item.id,
+      Uint8List.fromList(img.encodeJpg(img.Image(width: 2, height: 2))),
+    );
+    final media = MediaVaultService(
+      repository: repository,
+      pickImport: () async => null,
+      capturePhoto: () async => null,
+      saveExport: (_, _) async => true,
+    );
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: VaultHome(
+            repository: repository,
+            media: media,
+            confirmExport: true,
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(repository.thumbnailReadIds, contains(item.id));
+    expect(find.byKey(Key('vault-thumbnail-${item.id}')), findsOneWidget);
+    expect(repository.readBytesCalls, 0);
+  });
 
   testWidgets('gallery long press enables multi-select bulk actions', (
     tester,

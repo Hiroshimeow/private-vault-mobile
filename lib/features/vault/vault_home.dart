@@ -102,7 +102,9 @@ class _VaultHomeState extends State<VaultHome> {
   }
 
   Future<Uint8List?>? _thumbnailFor(VaultItem item) {
-    if (item.kind != VaultItemKind.image) return null;
+    if (item.kind != VaultItemKind.image && item.kind != VaultItemKind.video) {
+      return null;
+    }
     final repository = widget.repository;
     if (repository is! VaultThumbnailRepository) return null;
     return _thumbnailFutures.putIfAbsent(
