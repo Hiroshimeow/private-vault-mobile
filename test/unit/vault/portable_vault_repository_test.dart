@@ -1,8 +1,10 @@
+import 'dart:async';
 import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:private_vault_mobile/core/crypto/vault_crypto.dart';
+import 'package:private_vault_mobile/features/vault/crypto_v2/portable_vault_key_deriver.dart';
 import 'package:private_vault_mobile/features/vault/portable_storage/portable_vault_repository.dart';
 import 'package:private_vault_mobile/features/vault/portable_storage/portable_vault_session.dart';
 import 'package:private_vault_mobile/features/vault/portable_storage/portable_vault_storage.dart';
@@ -422,6 +424,29 @@ void main() {
     },
   );
 
+  test(
+    'clear during in-flight derivation prevents stale key activation',
+    () async {
+      final deriver = _DeferredPortableVaultKeyDeriver();
+      final session = PortableVaultSession(keyDeriver: deriver);
+      await session.open('0000');
+      final previous = session.requireMaterial();
+
+      final pending = session.open('1234');
+      await deriver.secondStarted.future;
+      session.clear();
+      deriver.releaseSecond.complete();
+
+      await expectLater(
+        pending,
+        throwsA(isA<PortableVaultSessionChangedException>()),
+      );
+      expect(session.isOpen, isFalse);
+      expect(previous.encryptionKey.isDestroyed, isTrue);
+      expect(deriver.secondMaterial?.encryptionKey.isDestroyed, isTrue);
+    },
+  );
+
   test('closed session cannot read vault', () async {
     final repo = await repository('0000');
     repo.clearSession();
@@ -442,6 +467,26 @@ Future<void> _copyDirectory(Directory source, Directory destination) async {
       await File(target).parent.create(recursive: true);
       await entity.copy(target);
     }
+  }
+}
+
+class _DeferredPortableVaultKeyDeriver extends PortableVaultKeyDeriver {
+  final Completer<void> secondStarted = Completer<void>();
+  final Completer<void> releaseSecond = Completer<void>();
+  int _calls = 0;
+  PortableVaultKeyMaterial? secondMaterial;
+
+  @override
+  Future<PortableVaultKeyMaterial> derive(String pin) async {
+    _calls += 1;
+    final call = _calls;
+    if (call == 2) {
+      secondStarted.complete();
+      await releaseSecond.future;
+    }
+    final material = await super.derive(pin);
+    if (call == 2) secondMaterial = material;
+    return material;
   }
 }
 

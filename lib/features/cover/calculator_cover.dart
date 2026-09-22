@@ -61,7 +61,10 @@ class _CalculatorCoverState extends State<CalculatorCover>
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state == AppLifecycleState.resumed) return;
+    if (state == AppLifecycleState.resumed ||
+        state == AppLifecycleState.inactive) {
+      return;
+    }
     _unlockGate.cancelHold(notifyRelease: true);
     _unlockGate.clear();
   }

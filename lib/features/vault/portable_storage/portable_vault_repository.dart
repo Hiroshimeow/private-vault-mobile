@@ -37,10 +37,11 @@ class PortableVaultRepository
     Future<void> Function() commitIdentity,
   ) async {
     await _requireAccess();
+    final expectedGeneration = session.generation;
     final next = await session.prepare(pin);
     try {
       await commitIdentity();
-      session.activate(next);
+      session.activate(next, expectedGeneration: expectedGeneration);
     } on Object {
       next.destroy();
       rethrow;

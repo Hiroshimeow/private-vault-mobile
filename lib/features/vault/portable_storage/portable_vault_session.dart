@@ -14,10 +14,19 @@ class PortableVaultSession {
       keyDeriver.derive(pin);
 
   Future<void> open(String pin) async {
-    activate(await prepare(pin));
+    final expectedGeneration = _generation;
+    final next = await prepare(pin);
+    activate(next, expectedGeneration: expectedGeneration);
   }
 
-  void activate(PortableVaultKeyMaterial material) {
+  void activate(
+    PortableVaultKeyMaterial material, {
+    required int expectedGeneration,
+  }) {
+    if (_generation != expectedGeneration) {
+      material.destroy();
+      throw const PortableVaultSessionChangedException();
+    }
     final previous = _material;
     _material = material;
     _generation += 1;
@@ -34,13 +43,16 @@ class PortableVaultSession {
 
   void clear() {
     final material = _material;
-    if (material == null) return;
     _material = null;
     _generation += 1;
-    material.destroy();
+    material?.destroy();
   }
 }
 
 class PortableVaultSessionClosedException implements Exception {
   const PortableVaultSessionClosedException();
+}
+
+class PortableVaultSessionChangedException implements Exception {
+  const PortableVaultSessionChangedException();
 }

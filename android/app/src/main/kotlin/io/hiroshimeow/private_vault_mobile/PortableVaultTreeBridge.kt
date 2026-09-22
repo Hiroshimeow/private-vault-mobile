@@ -195,8 +195,11 @@ class PortableVaultTreeBridge(
             throw IllegalStateException("Portable Vault object path is not a file")
         }
         val file = existing
-            ?: parent.createFile("application/octet-stream", name)
-            ?: throw IllegalStateException("Portable Vault object could not be created")
+            ?: ensureExactDisplayName(
+                parent.createFile("application/octet-stream", name)
+                    ?: throw IllegalStateException("Portable Vault object could not be created"),
+                name,
+            )
         activity.contentResolver.openOutputStream(file.uri, "wt")?.use { stream ->
             stream.write(bytes)
             stream.flush()
@@ -212,8 +215,11 @@ class PortableVaultTreeBridge(
         }
 
         val temporaryName = ".${targetName}.partial-${System.nanoTime()}"
-        val temporary = parent.createFile("application/octet-stream", temporaryName)
-            ?: throw IllegalStateException("Portable Vault temporary object could not be created")
+        val temporary = ensureExactDisplayName(
+            parent.createFile("application/octet-stream", temporaryName)
+                ?: throw IllegalStateException("Portable Vault temporary object could not be created"),
+            temporaryName,
+        )
         val descriptor = activity.contentResolver.openFileDescriptor(temporary.uri, "rw")
         if (descriptor == null) {
             temporary.delete()
@@ -265,6 +271,7 @@ class PortableVaultTreeBridge(
                 pending.temporary.delete()
                 throw IllegalStateException("Portable Vault object commit failed")
             }
+            ensureExactDisplayName(pending.temporary, pending.targetName)
             return true
         } catch (error: Exception) {
             closeQuietly(pending.stream)
@@ -278,6 +285,18 @@ class PortableVaultTreeBridge(
         closeQuietly(pending.stream)
         pending.temporary.delete()
         return true
+    }
+
+    private fun ensureExactDisplayName(
+        file: DocumentFile,
+        expectedName: String,
+    ): DocumentFile {
+        if (file.name == expectedName) return file
+        if (file.renameTo(expectedName) && file.name == expectedName) return file
+        file.delete()
+        throw IllegalStateException(
+            "Portable Vault provider changed object name; refusing unsafe commit",
+        )
     }
 
     private fun closeQuietly(stream: FileOutputStream) {

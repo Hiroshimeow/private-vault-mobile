@@ -358,7 +358,7 @@ class _PrivateVaultAppState extends State<PrivateVaultApp>
                 setSheetState(() => error = 'Protected storage unavailable');
                 return;
               }
-              if (!sheetContext.mounted) {
+              if (!sheetContext.mounted || !widget.lockController.isLocked) {
                 final repository = widget.vaultRepository;
                 if (repository is PinSessionVaultRepository) {
                   repository.clearSession();

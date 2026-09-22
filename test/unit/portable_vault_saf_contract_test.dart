@@ -35,6 +35,14 @@ void main() {
     expect(bridge, contains('.partial-'));
     expect(bridge, contains('pending.stream.fd.sync()'));
     expect(bridge, contains('pending.temporary.renameTo(pending.targetName)'));
+    expect(bridge, contains('ensureExactDisplayName'));
+    expect(bridge, contains('file.name == expectedName'));
+    expect(
+      bridge,
+      contains(
+        'Portable Vault provider changed object name; refusing unsafe commit',
+      ),
+    );
   });
 
   test('Android SAF bridge rejects traversal-like path segments', () {

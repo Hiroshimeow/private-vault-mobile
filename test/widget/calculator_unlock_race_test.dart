@@ -145,6 +145,42 @@ void main() {
   );
 
   testWidgets(
+    'biometric focus loss does not cancel the active equals attempt',
+    (tester) async {
+      final lock = LockController();
+      final unlock = DeferredUnlockService();
+      final biometric = ControlledBiometric();
+      await tester.pumpWidget(
+        PrivateVaultApp(
+          lockController: lock,
+          unlockService: unlock,
+          biometricUnlock: biometric,
+          initialSettings: const AppSettings.defaults().copyWith(
+            biometricsEnabled: true,
+          ),
+        ),
+      );
+
+      final gesture = await triggerBiometricHold(tester);
+      unlock.verification.complete(true);
+      await tester.pump();
+      await tester.pump();
+      expect(biometric.authenticateCalls, 1);
+
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive);
+      await tester.pump();
+      expect(biometric.cancelCalls, 0);
+
+      biometric.authentication.complete(true);
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+      await tester.pumpAndSettle();
+      expect(lock.isLocked, isFalse);
+
+      await gesture.up();
+    },
+  );
+
+  testWidgets(
     'release after biometric starts cancels and stale success cannot unlock',
     (tester) async {
       final lock = LockController();
