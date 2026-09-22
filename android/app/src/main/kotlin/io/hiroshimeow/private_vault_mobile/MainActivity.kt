@@ -11,6 +11,7 @@ import io.flutter.plugin.common.MethodChannel
 class MainActivity : FlutterFragmentActivity() {
     private val channelName = "private_vault/platform"
     private var workProfileApiAdapter: WorkProfileHostApiAdapter? = null
+    private var portableVaultTreeBridge: PortableVaultTreeBridge? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -24,6 +25,10 @@ class MainActivity : FlutterFragmentActivity() {
         WorkProfileHostApi.setUp(
             flutterEngine.dartExecutor.binaryMessenger,
             adapter,
+        )
+        portableVaultTreeBridge = PortableVaultTreeBridge(
+            this,
+            flutterEngine.dartExecutor.binaryMessenger,
         )
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, channelName)
             .setMethodCallHandler { call, result ->
@@ -49,6 +54,9 @@ class MainActivity : FlutterFragmentActivity() {
     }
 
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: android.content.Intent?) {
+        if (portableVaultTreeBridge?.onActivityResult(requestCode, resultCode, data) == true) {
+            return
+        }
         if (workProfileApiAdapter?.onActivityResult(requestCode, resultCode, data) == true) {
             return
         }

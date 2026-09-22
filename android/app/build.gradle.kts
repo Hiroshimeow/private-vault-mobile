@@ -45,6 +45,7 @@ kotlin {
 }
 
 dependencies {
+    implementation("androidx.documentfile:documentfile:1.1.0")
     testImplementation("junit:junit:4.13.2")
 }
 

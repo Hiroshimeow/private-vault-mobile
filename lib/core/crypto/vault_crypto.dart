@@ -39,8 +39,12 @@ class VaultCrypto {
 
   Future<SecretKey> newKey() => _algorithm.newSecretKey();
 
-  Future<SealedVaultData> encrypt(Uint8List clearText, SecretKey key) async {
-    final box = await _algorithm.encrypt(clearText, secretKey: key);
+  Future<SealedVaultData> encrypt(
+    Uint8List clearText,
+    SecretKey key, {
+    List<int> aad = const <int>[],
+  }) async {
+    final box = await _algorithm.encrypt(clearText, secretKey: key, aad: aad);
     return SealedVaultData(
       cipherText: Uint8List.fromList(box.cipherText),
       nonce: Uint8List.fromList(box.nonce),
@@ -48,11 +52,16 @@ class VaultCrypto {
     );
   }
 
-  Future<Uint8List> decrypt(SealedVaultData sealed, SecretKey key) async {
+  Future<Uint8List> decrypt(
+    SealedVaultData sealed,
+    SecretKey key, {
+    List<int> aad = const <int>[],
+  }) async {
     try {
       final clear = await _algorithm.decrypt(
         SecretBox(sealed.cipherText, nonce: sealed.nonce, mac: Mac(sealed.mac)),
         secretKey: key,
+        aad: aad,
       );
       return Uint8List.fromList(clear);
     } on SecretBoxAuthenticationError {

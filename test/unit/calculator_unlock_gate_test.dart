@@ -139,4 +139,74 @@ void main() {
       });
     },
   );
+
+  test('eligible hold pauses idle expiry until the hold resolves', () {
+    fakeAsync((async) {
+      final attempts = <CalculatorUnlockAttempt>[];
+      final gate = CalculatorUnlockGateController(
+        pinLength: 4,
+        mode: CalculatorUnlockMode.pin,
+        holdDuration: const Duration(seconds: 3),
+        onTriggered: attempts.add,
+        onReleased: (_) {},
+      );
+
+      for (final digit in '1123'.split('')) {
+        gate.recordDigit(digit);
+      }
+      async.elapse(const Duration(seconds: 7));
+      gate.keyDown('1');
+      async.elapse(const Duration(seconds: 3));
+
+      expect(attempts, hasLength(1));
+      expect(attempts.single.candidate, '1123');
+    });
+  });
+
+  test('cancelled eligible hold rearms secret idle reset', () {
+    fakeAsync((async) {
+      final gate = CalculatorUnlockGateController(
+        pinLength: 4,
+        mode: CalculatorUnlockMode.pin,
+        holdDuration: const Duration(seconds: 3),
+        onTriggered: (_) {},
+        onReleased: (_) {},
+      );
+
+      for (final digit in '1123'.split('')) {
+        gate.recordDigit(digit);
+      }
+      async.elapse(const Duration(seconds: 7));
+      gate.keyDown('1');
+      async.elapse(const Duration(seconds: 1));
+      gate.cancelHold(notifyRelease: true);
+      expect(gate.digits, '1123');
+
+      async.elapse(const Duration(seconds: 8));
+      expect(gate.digits, isEmpty);
+    });
+  });
+
+  test('pointer cancellation after trigger reports release once', () {
+    fakeAsync((async) {
+      final releases = <CalculatorUnlockTrigger>[];
+      final gate = CalculatorUnlockGateController(
+        pinLength: 4,
+        mode: CalculatorUnlockMode.biometric,
+        holdDuration: const Duration(seconds: 1),
+        onTriggered: (_) {},
+        onReleased: releases.add,
+      );
+
+      for (final digit in '0000'.split('')) {
+        gate.recordDigit(digit);
+      }
+      gate.keyDown('=');
+      async.elapse(const Duration(seconds: 1));
+      gate.cancelHold(notifyRelease: true);
+
+      expect(releases, [CalculatorUnlockTrigger.equals]);
+      expect(gate.digits, isEmpty);
+    });
+  });
 }

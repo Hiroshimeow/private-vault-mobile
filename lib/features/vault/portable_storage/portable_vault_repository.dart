@@ -1,26 +1,33 @@
-import 'dart:io';
 import 'dart:math';
 import 'dart:typed_data';
 
-import 'package:private_vault_mobile/features/vault/crypto_v2/portable_vault_key_deriver.dart';
+import 'package:private_vault_mobile/core/crypto/vault_crypto.dart';
+import 'package:private_vault_mobile/features/vault/crypto_v2/portable_vault_format.dart';
 import 'package:private_vault_mobile/features/vault/crypto_v2/portable_vault_object_codec.dart';
+import 'package:private_vault_mobile/features/vault/portable_storage/portable_vault_session.dart';
+import 'package:private_vault_mobile/features/vault/portable_storage/portable_vault_storage.dart';
 import 'package:private_vault_mobile/features/vault/vault_repository.dart';
 
-typedef PortableVaultRootDirectory = Future<Directory> Function();
-typedef PortableVaultPinProvider = Future<String> Function();
-
-class PortableVaultRepository implements VaultRepository {
+class PortableVaultRepository
+    implements VaultScanAwareRepository, PinSessionVaultRepository {
   PortableVaultRepository({
-    required this.rootDirectory,
-    required this.pinProvider,
-    this.keyDeriver = const PortableVaultKeyDeriver(),
+    required this.storage,
+    required this.session,
     PortableVaultObjectCodec? objectCodec,
   }) : objectCodec = objectCodec ?? PortableVaultObjectCodec();
 
-  final PortableVaultRootDirectory rootDirectory;
-  final PortableVaultPinProvider pinProvider;
-  final PortableVaultKeyDeriver keyDeriver;
+  final PortableVaultStorage storage;
+  final PortableVaultSession session;
   final PortableVaultObjectCodec objectCodec;
+
+  @override
+  bool get hasOpenSession => session.isOpen;
+
+  @override
+  Future<void> openSession(String pin) => session.open(pin);
+
+  @override
+  void clearSession() => session.clear();
 
   @override
   Future<VaultItem> addBytes(
@@ -30,7 +37,8 @@ class PortableVaultRepository implements VaultRepository {
     if (kind == VaultItemKind.unknown) {
       throw ArgumentError.value(kind, 'kind', 'unknown cannot be persisted');
     }
-    final context = await _context();
+    await _requireAccess();
+    final material = session.requireMaterial();
     final createdAt = DateTime.now().toUtc();
     final id = _newId();
     final encoded = await objectCodec.encode(
@@ -38,45 +46,74 @@ class PortableVaultRepository implements VaultRepository {
         fileName: '$id.bin',
         mediaType: _mediaTypeFor(kind),
         createdAtMillis: createdAt.millisecondsSinceEpoch,
+        namespaceId: material.namespaceId,
         bytes: bytes,
       ),
-      context.material.encryptionKey,
+      material.encryptionKey,
     );
-    await File(_objectPath(context.objectsDirectory, id))
-        .writeAsBytes(encoded, flush: true);
+    await storage.write(_objectPath(material.namespaceId, id), encoded);
     return VaultItem(id: id, kind: kind, createdAt: createdAt);
   }
 
   @override
   Future<Uint8List> readBytes(String id) async {
-    final context = await _context();
-    final file = File(_objectPath(context.objectsDirectory, id));
-    if (!await file.exists()) throw const VaultFormatException();
-    final object = await objectCodec.decode(
-      await file.readAsBytes(),
-      context.material.encryptionKey,
+    await _requireAccess();
+    final material = session.requireMaterial();
+    final encoded = await storage.read(_objectPath(material.namespaceId, id));
+    final object = await objectCodec.decode(encoded, material.encryptionKey);
+    _validateObjectIdentity(
+      object,
+      expectedNamespace: material.namespaceId,
+      expectedId: id,
     );
     return object.bytes;
   }
 
   @override
   Future<List<VaultItem>> list() async {
-    final context = await _context();
-    final files = await context.objectsDirectory
-        .list()
-        .where((entity) => entity is File && entity.path.endsWith('.pvb'))
-        .cast<File>()
-        .toList();
+    final result = await scan();
+    if (result.hasProblems) throw VaultScanException(result);
+    return result.items;
+  }
+
+  @override
+  Future<VaultScanResult> scan() async {
+    await _requireAccess();
+    final material = session.requireMaterial();
+    final basePath = '${material.namespaceId}/objects';
+
+    late final List<String> names;
+    try {
+      names = await storage.list(basePath);
+    } on PortableVaultStorageException {
+      return const VaultScanResult(items: [], storageFailureCount: 1);
+    }
+
     final items = <VaultItem>[];
-    for (final file in files) {
+    var corruptCount = 0;
+    var unsupportedCount = 0;
+    var foreignCount = 0;
+    var storageFailureCount = 0;
+
+    for (final name in names.where((value) => value.endsWith('.pvb'))) {
+      final id = name.substring(0, name.length - '.pvb'.length);
       try {
+        final encoded = await storage.read('$basePath/$name');
         final object = await objectCodec.decode(
-          await file.readAsBytes(),
-          context.material.encryptionKey,
+          encoded,
+          material.encryptionKey,
         );
+        if (object.namespaceId != material.namespaceId) {
+          foreignCount += 1;
+          continue;
+        }
+        if (object.fileName != '$id.bin') {
+          corruptCount += 1;
+          continue;
+        }
         items.add(
           VaultItem(
-            id: _idFromPath(file.path),
+            id: id,
             kind: _kindFromMediaType(object.mediaType),
             createdAt: DateTime.fromMillisecondsSinceEpoch(
               object.createdAtMillis,
@@ -84,42 +121,53 @@ class PortableVaultRepository implements VaultRepository {
             ),
           ),
         );
-      } on Object {
-        // Ignore foreign/corrupt objects in the selected namespace.
+      } on PortableVaultUnsupportedProfileException {
+        unsupportedCount += 1;
+      } on VaultIntegrityException {
+        corruptCount += 1;
+      } on PortableVaultFormatException {
+        corruptCount += 1;
+      } on PortableVaultStorageException {
+        storageFailureCount += 1;
       }
     }
+
     items.sort((a, b) => b.createdAt.compareTo(a.createdAt));
-    return items;
+    return VaultScanResult(
+      items: List.unmodifiable(items),
+      corruptCount: corruptCount,
+      unsupportedCount: unsupportedCount,
+      foreignCount: foreignCount,
+      storageFailureCount: storageFailureCount,
+    );
   }
 
   @override
   Future<void> delete(String id) async {
-    final context = await _context();
-    final file = File(_objectPath(context.objectsDirectory, id));
-    if (await file.exists()) await file.delete();
+    await _requireAccess();
+    final material = session.requireMaterial();
+    await storage.delete(_objectPath(material.namespaceId, id));
   }
 
-  Future<_PortableVaultContext> _context() async {
-    final root = await rootDirectory();
-    if (!await root.exists()) await root.create(recursive: true);
-    final material = await keyDeriver.derive(await pinProvider());
-    final namespace = Directory(
-      '${root.path}${Platform.pathSeparator}${material.namespaceId}',
-    );
-    final objects = Directory(
-      '${namespace.path}${Platform.pathSeparator}objects',
-    );
-    if (!await objects.exists()) await objects.create(recursive: true);
-    return _PortableVaultContext(material: material, objectsDirectory: objects);
+  Future<void> _requireAccess() async {
+    if (!await storage.hasAccess()) {
+      throw const PortableVaultRootUnavailableException();
+    }
   }
 
-  String _objectPath(Directory objects, String id) =>
-      '${objects.path}${Platform.pathSeparator}$id.pvb';
-
-  String _idFromPath(String path) {
-    final name = path.split(Platform.pathSeparator).last;
-    return name.substring(0, name.length - '.pvb'.length);
+  void _validateObjectIdentity(
+    PortableVaultObject object, {
+    required String expectedNamespace,
+    required String expectedId,
+  }) {
+    if (object.namespaceId != expectedNamespace ||
+        object.fileName != '$expectedId.bin') {
+      throw const PortableVaultFormatException();
+    }
   }
+
+  String _objectPath(String namespaceId, String id) =>
+      '$namespaceId/objects/$id.pvb';
 
   String _newId() {
     final random = Random.secure();
@@ -146,11 +194,6 @@ class PortableVaultRepository implements VaultRepository {
   }
 }
 
-class _PortableVaultContext {
-  const _PortableVaultContext({
-    required this.material,
-    required this.objectsDirectory,
-  });
-  final PortableVaultKeyMaterial material;
-  final Directory objectsDirectory;
+class PortableVaultRootUnavailableException implements Exception {
+  const PortableVaultRootUnavailableException();
 }

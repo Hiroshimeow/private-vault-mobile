@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:cryptography/cryptography.dart';
+import 'package:private_vault_mobile/features/vault/crypto_v2/portable_vault_format.dart';
 
 class PortableVaultKeyMaterial {
   const PortableVaultKeyMaterial({
@@ -15,18 +16,17 @@ class PortableVaultKeyMaterial {
 
 /// Portable Vault Format V2 key schedule.
 ///
-/// This intentionally derives identity only from the PIN so the same PIN can
-/// reopen copied ciphertext on another device. A short PIN therefore permits
-/// offline brute-force; callers must not present this as high-entropy storage.
+/// Identity is intentionally derived only from the PIN so copied ciphertext can
+/// be reopened on another implementation. Short PINs permit offline brute-force;
+/// this is a documented product tradeoff, not a high-entropy password scheme.
 class PortableVaultKeyDeriver {
   const PortableVaultKeyDeriver();
 
-  static const version = 2;
-  static const memoryKiB = 19456;
-  static const iterations = 2;
-  static const parallelism = 1;
-  static const hashLength = 64;
-  static const _domain = 'PrivateVaultPortableV2\u0000argon2id';
+  static const version = PortableVaultFormatV2.formatVersion;
+  static const memoryKiB = PortableVaultFormatV2.kdfMemoryKiB;
+  static const iterations = PortableVaultFormatV2.kdfIterations;
+  static const parallelism = PortableVaultFormatV2.kdfParallelism;
+  static const hashLength = PortableVaultFormatV2.derivedRootKeySize;
 
   Future<PortableVaultKeyMaterial> derive(String pin) async {
     if (pin.length < 4 || pin.length > 12 || !RegExp(r'^\d+$').hasMatch(pin)) {
@@ -41,14 +41,19 @@ class PortableVaultKeyDeriver {
     );
     final root = await algorithm.deriveKeyFromPassword(
       password: pin,
-      nonce: utf8.encode(_domain),
+      nonce: utf8.encode(PortableVaultFormatV2.argon2Domain),
     );
     final bytes = await root.extractBytes();
 
-    final encryptionBytes = Uint8List.fromList(bytes.sublist(0, 32));
-    final namespaceSeed = bytes.sublist(32, 64);
+    final encryptionBytes = Uint8List.fromList(
+      bytes.sublist(0, PortableVaultFormatV2.cipherKeySize),
+    );
+    final namespaceSeed = bytes.sublist(
+      PortableVaultFormatV2.cipherKeySize,
+      PortableVaultFormatV2.derivedRootKeySize,
+    );
     final namespaceHash = await Sha256().hash([
-      ...utf8.encode('PrivateVaultPortableV2/namespace'),
+      ...utf8.encode(PortableVaultFormatV2.namespaceDomain),
       ...namespaceSeed,
     ]);
 

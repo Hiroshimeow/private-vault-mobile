@@ -70,17 +70,17 @@ class CalculatorUnlockGateController {
   }
 
   void keyDown(String key) {
-    cancelHold();
+    cancelHold(notifyRelease: true);
     final trigger = _eligibleTrigger(key);
     if (trigger == null) return;
 
+    _idleTimer?.cancel();
+    _idleTimer = null;
     _heldKey = key;
     _activeTrigger = trigger;
     _holdTimer = Timer(holdDuration, () {
       if (_heldKey != key || _activeTrigger != trigger) return;
       _triggered = true;
-      _idleTimer?.cancel();
-      _idleTimer = null;
       onTriggered(
         CalculatorUnlockAttempt(candidate: _digits, trigger: trigger),
       );
@@ -99,17 +99,29 @@ class CalculatorUnlockGateController {
     if (_triggered && trigger != null) {
       onReleased(trigger);
       clear();
+    } else if (_digits.isNotEmpty) {
+      _armIdleReset();
     }
     _triggered = false;
     return suppressTap;
   }
 
-  void cancelHold() {
+  void cancelHold({bool notifyRelease = false}) {
+    final trigger = _activeTrigger;
+    final wasTriggered = _triggered;
+
     _holdTimer?.cancel();
     _holdTimer = null;
     _heldKey = null;
     _activeTrigger = null;
     _triggered = false;
+
+    if (wasTriggered && trigger != null && notifyRelease) {
+      onReleased(trigger);
+      clear();
+    } else if (_digits.isNotEmpty && _idleTimer == null) {
+      _armIdleReset();
+    }
   }
 
   CalculatorUnlockTrigger? _eligibleTrigger(String key) {

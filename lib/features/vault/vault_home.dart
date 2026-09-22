@@ -4,6 +4,7 @@ import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:private_vault_mobile/app/private_vault_theme.dart';
 import 'package:private_vault_mobile/features/media/media_vault_service.dart';
+import 'package:private_vault_mobile/features/vault/portable_storage/portable_vault_repository.dart';
 import 'package:private_vault_mobile/features/vault/vault_repository.dart';
 
 class VaultHome extends StatefulWidget {
@@ -28,6 +29,7 @@ class _VaultHomeState extends State<VaultHome> {
   List<VaultItem> _items = const [];
   bool _busy = true;
   String? _error;
+  String? _warning;
 
   @override
   void initState() {
@@ -37,24 +39,53 @@ class _VaultHomeState extends State<VaultHome> {
 
   Future<void> _reload() async {
     try {
-      final items = await widget.repository.list();
+      final repository = widget.repository;
+      if (repository is VaultScanAwareRepository) {
+        final scan = await repository.scan();
+        if (!mounted) return;
+        setState(() {
+          _items = scan.items;
+          _busy = false;
+          _error = null;
+          _warning = scan.hasProblems
+              ? '${scan.unreadableCount} protected item(s) could not be read '
+                    '(corrupt: ${scan.corruptCount}, unsupported: '
+                    '${scan.unsupportedCount}, access: '
+                    '${scan.storageFailureCount}).'
+              : null;
+        });
+        return;
+      }
+
+      final items = await repository.list();
       if (!mounted) return;
       setState(() {
         _items = items;
         _busy = false;
         _error = null;
+        _warning = null;
+      });
+    } on PortableVaultRootUnavailableException {
+      if (!mounted) return;
+      setState(() {
+        _items = const [];
+        _busy = false;
+        _warning = null;
+        _error = 'Portable Vault folder is not authorized. Choose a shared folder in Settings.';
       });
     } on MissingVaultKeyException {
       if (!mounted) return;
       setState(() {
         _items = const [];
         _busy = false;
+        _warning = null;
         _error = 'Protected key unavailable. Existing items stay locked.';
       });
     } on Object {
       if (!mounted) return;
       setState(() {
         _busy = false;
+        _warning = null;
         _error = 'Protected items could not be loaded.';
       });
     }
@@ -291,6 +322,17 @@ class _VaultHomeState extends State<VaultHome> {
             ],
           ),
         ),
+        if (_warning != null)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 4, 16, 8),
+            child: Card(
+              child: ListTile(
+                leading: const Icon(Icons.warning_amber_outlined),
+                title: const Text('Some protected items are unreadable'),
+                subtitle: Text(_warning!),
+              ),
+            ),
+          ),
         Expanded(
           child: AnimatedSwitcher(
             duration: PrivateVaultTheme.motionDuration(context),

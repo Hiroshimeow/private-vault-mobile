@@ -3,18 +3,21 @@ import 'dart:typed_data';
 
 import 'package:cryptography/cryptography.dart';
 import 'package:private_vault_mobile/core/crypto/vault_crypto.dart';
+import 'package:private_vault_mobile/features/vault/crypto_v2/portable_vault_format.dart';
 
 class PortableVaultObject {
   const PortableVaultObject({
     required this.fileName,
     required this.mediaType,
     required this.createdAtMillis,
+    required this.namespaceId,
     required this.bytes,
   });
 
   final String fileName;
   final String mediaType;
   final int createdAtMillis;
+  final String namespaceId;
   final Uint8List bytes;
 }
 
@@ -22,18 +25,17 @@ class PortableVaultObjectCodec {
   PortableVaultObjectCodec({VaultCrypto? crypto})
     : _crypto = crypto ?? VaultCrypto();
 
-  static final Uint8List _magic = Uint8List.fromList(ascii.encode('PV2O'));
-
   final VaultCrypto _crypto;
 
   Future<Uint8List> encode(PortableVaultObject object, SecretKey key) async {
     final metadata = Uint8List.fromList(
       utf8.encode(
         jsonEncode({
-          'v': 2,
+          'v': PortableVaultFormatV2.formatVersion,
           'name': object.fileName,
           'type': object.mediaType,
           'created': object.createdAtMillis,
+          'namespace': object.namespaceId,
         }),
       ),
     );
@@ -41,10 +43,16 @@ class PortableVaultObjectCodec {
       ..add(_u32(metadata.length))
       ..add(metadata)
       ..add(object.bytes);
-    final sealed = await _crypto.encrypt(clear.takeBytes(), key);
+    final header = PortableVaultFormatV2.buildHeader();
+    final sealed = await _crypto.encrypt(clear.takeBytes(), key, aad: header);
+
+    if (sealed.nonce.length != PortableVaultFormatV2.nonceSize ||
+        sealed.mac.length != PortableVaultFormatV2.tagSize) {
+      throw const PortableVaultFormatException();
+    }
 
     return (BytesBuilder(copy: false)
-          ..add(_magic)
+          ..add(header)
           ..add(sealed.nonce)
           ..add(sealed.mac)
           ..add(sealed.cipherText))
@@ -52,19 +60,30 @@ class PortableVaultObjectCodec {
   }
 
   Future<PortableVaultObject> decode(Uint8List encoded, SecretKey key) async {
-    const prefixLength = 4 + 12 + 16;
-    if (encoded.length < prefixLength + 4 ||
-        !_matchesMagic(encoded.sublist(0, 4))) {
+    final prefixLength =
+        PortableVaultFormatV2.headerSize +
+        PortableVaultFormatV2.nonceSize +
+        PortableVaultFormatV2.tagSize;
+    if (encoded.length < prefixLength + 4) {
       throw const PortableVaultFormatException();
     }
 
+    final header = Uint8List.fromList(
+      encoded.sublist(0, PortableVaultFormatV2.headerSize),
+    );
+    PortableVaultFormatV2.validateHeader(header);
+
+    final nonceStart = PortableVaultFormatV2.headerSize;
+    final tagStart = nonceStart + PortableVaultFormatV2.nonceSize;
+    final cipherStart = tagStart + PortableVaultFormatV2.tagSize;
     final clear = await _crypto.decrypt(
       SealedVaultData(
-        nonce: Uint8List.fromList(encoded.sublist(4, 16)),
-        mac: Uint8List.fromList(encoded.sublist(16, 32)),
-        cipherText: Uint8List.fromList(encoded.sublist(32)),
+        nonce: Uint8List.fromList(encoded.sublist(nonceStart, tagStart)),
+        mac: Uint8List.fromList(encoded.sublist(tagStart, cipherStart)),
+        cipherText: Uint8List.fromList(encoded.sublist(cipherStart)),
       ),
       key,
+      aad: header,
     );
     if (clear.length < 4) throw const PortableVaultFormatException();
 
@@ -76,29 +95,23 @@ class PortableVaultObjectCodec {
     try {
       final raw = jsonDecode(utf8.decode(clear.sublist(4, 4 + metadataLength)));
       if (raw is! Map<String, dynamic> ||
-          raw['v'] != 2 ||
+          raw['v'] != PortableVaultFormatV2.formatVersion ||
           raw['name'] is! String ||
           raw['type'] is! String ||
-          raw['created'] is! int) {
+          raw['created'] is! int ||
+          raw['namespace'] is! String) {
         throw const PortableVaultFormatException();
       }
       return PortableVaultObject(
         fileName: raw['name'] as String,
         mediaType: raw['type'] as String,
         createdAtMillis: raw['created'] as int,
+        namespaceId: raw['namespace'] as String,
         bytes: Uint8List.fromList(clear.sublist(4 + metadataLength)),
       );
     } on FormatException {
       throw const PortableVaultFormatException();
     }
-  }
-
-  bool _matchesMagic(List<int> candidate) {
-    if (candidate.length != _magic.length) return false;
-    for (var i = 0; i < _magic.length; i++) {
-      if (candidate[i] != _magic[i]) return false;
-    }
-    return true;
   }
 
   Uint8List _u32(int value) {

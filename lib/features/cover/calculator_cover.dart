@@ -288,8 +288,8 @@ class _CalculatorCoverState extends State<CalculatorCover> {
                                         onPointerUp: (_) => _unlockGate.keyUp(
                                           labels[(row * 4) + column],
                                         ),
-                                        onPointerCancel: (_) =>
-                                            _unlockGate.cancelHold(),
+                                        onPointerCancel: (_) => _unlockGate
+                                            .cancelHold(notifyRelease: true),
                                         child: FilledButton(
                                           key: Key(
                                             <String>[

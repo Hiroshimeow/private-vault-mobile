@@ -70,6 +70,41 @@ abstract interface class VaultRepository {
   Future<void> delete(String id);
 }
 
+class VaultScanResult {
+  const VaultScanResult({
+    required this.items,
+    this.corruptCount = 0,
+    this.unsupportedCount = 0,
+    this.foreignCount = 0,
+    this.storageFailureCount = 0,
+  });
+
+  final List<VaultItem> items;
+  final int corruptCount;
+  final int unsupportedCount;
+  final int foreignCount;
+  final int storageFailureCount;
+
+  int get unreadableCount =>
+      corruptCount + unsupportedCount + foreignCount + storageFailureCount;
+  bool get hasProblems => unreadableCount > 0;
+}
+
+abstract interface class VaultScanAwareRepository implements VaultRepository {
+  Future<VaultScanResult> scan();
+}
+
+abstract interface class PinSessionVaultRepository implements VaultRepository {
+  Future<void> openSession(String pin);
+  void clearSession();
+  bool get hasOpenSession;
+}
+
+class VaultScanException implements Exception {
+  const VaultScanException(this.result);
+  final VaultScanResult result;
+}
+
 typedef VaultRootDirectory = Future<Directory> Function();
 
 class LocalVaultRepository implements VaultRepository {

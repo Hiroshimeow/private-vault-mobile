@@ -14,8 +14,11 @@ import 'package:private_vault_mobile/features/auth/secure_unlock_service.dart';
 import 'package:private_vault_mobile/features/media/media_vault_service.dart';
 import 'package:private_vault_mobile/features/panic/panic_sensor_service.dart';
 import 'package:private_vault_mobile/features/settings/app_settings.dart';
+import 'package:private_vault_mobile/features/vault/portable_storage/portable_vault_repository.dart';
+import 'package:private_vault_mobile/features/vault/portable_storage/portable_vault_session.dart';
 import 'package:private_vault_mobile/features/vault/vault_repository.dart';
 import 'package:private_vault_mobile/platform/disguise_bridge.dart';
+import 'package:private_vault_mobile/platform/portable_vault_tree_bridge.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -28,14 +31,27 @@ Future<void> main() async {
     await unlockService.configure('0000');
   }
   final lockController = LockController();
-  final repository = LocalVaultRepository(
-    rootDirectory: () async {
-      final support = await getApplicationSupportDirectory();
-      return Directory(p.join(support.path, 'private-vault'));
-    },
-    keyStore: SecureVaultKeyStore(secrets),
-    crypto: VaultCrypto(),
-  );
+
+  final PortableVaultTreeBridge? portableTree = Platform.isAndroid
+      ? PortableVaultTreeBridge()
+      : null;
+  final VaultRepository repository;
+  if (portableTree != null) {
+    repository = PortableVaultRepository(
+      storage: portableTree,
+      session: PortableVaultSession(),
+    );
+  } else {
+    repository = LocalVaultRepository(
+      rootDirectory: () async {
+        final support = await getApplicationSupportDirectory();
+        return Directory(p.join(support.path, 'private-vault'));
+      },
+      keyStore: SecureVaultKeyStore(secrets),
+      crypto: VaultCrypto(),
+    );
+  }
+
   final media = MediaVaultService(
     repository: repository,
     pickImport: MediaVaultService.pickDeviceFile,
@@ -69,6 +85,7 @@ Future<void> main() async {
       settingsStore: settingsStore,
       panicService: panic,
       disguiseBridge: PlatformDisguiseBridge(),
+      portableRootAccess: portableTree,
       workProfileClient: Platform.isAndroid
           ? PigeonWorkProfileClient()
           : const UnavailableWorkProfileClient(),
