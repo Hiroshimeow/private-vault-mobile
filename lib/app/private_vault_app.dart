@@ -497,6 +497,7 @@ class _PrivateVaultAppState extends State<PrivateVaultApp>
           settings: const RouteSettings(name: '/secret'),
           builder: (_) => SecretWorkspace(
             onLock: widget.lockController.lock,
+            isSecretUnlocked: () => !widget.lockController.isLocked,
             unlockService: widget.unlockService,
             onPinChanged: _switchVaultPin,
             vaultRepository: widget.vaultRepository,
@@ -566,6 +567,7 @@ class SecretWorkspace extends StatefulWidget {
   const SecretWorkspace({
     super.key,
     required this.onLock,
+    required this.isSecretUnlocked,
     required this.unlockService,
     required this.onPinChanged,
     required this.onSystemHandoffChanged,
@@ -581,6 +583,7 @@ class SecretWorkspace extends StatefulWidget {
   });
 
   final VoidCallback onLock;
+  final ValueGetter<bool> isSecretUnlocked;
   final UnlockService unlockService;
   final Future<PinChangeResult> Function(String pin) onPinChanged;
   final ValueChanged<bool> onSystemHandoffChanged;
@@ -630,6 +633,8 @@ class _SecretWorkspaceState extends State<SecretWorkspace> {
         key: const ValueKey('work-profile-home'),
         client: widget.workProfileClient!,
         vaultShuttle: widget.vaultShuttle,
+        mediaService: widget.mediaService,
+        importAllowed: widget.isSecretUnlocked,
       );
     }
     final browserIndex = hasApps ? 2 : 1;
@@ -644,6 +649,7 @@ class _SecretWorkspaceState extends State<SecretWorkspace> {
       key: const ValueKey('settings-home'),
       settings: widget.settings,
       unlockService: widget.unlockService,
+      onLock: widget.onLock,
       onPinChanged: (pin) async {
         final result = await widget.onPinChanged(pin);
         if (result == PinChangeResult.active && mounted) {
@@ -742,6 +748,7 @@ class _SettingsHome extends StatefulWidget {
     super.key,
     required this.settings,
     required this.unlockService,
+    required this.onLock,
     required this.onPinChanged,
     required this.onChanged,
     this.disguiseBridge,
@@ -753,6 +760,7 @@ class _SettingsHome extends StatefulWidget {
 
   final AppSettings settings;
   final UnlockService unlockService;
+  final VoidCallback onLock;
   final Future<PinChangeResult> Function(String pin) onPinChanged;
   final ValueChanged<AppSettings> onChanged;
   final PlatformDisguiseBridge? disguiseBridge;
@@ -1017,15 +1025,7 @@ class _SettingsHomeState extends State<_SettingsHome> {
                   Navigator.of(dialogContext).pop();
                   if (result == PinChangeResult.committedSessionClosed &&
                       mounted) {
-                    ScaffoldMessenger.of(this.context)
-                      ..clearSnackBars()
-                      ..showSnackBar(
-                        const SnackBar(
-                          content: Text(
-                            'PIN changed. Unlock again with the new PIN.',
-                          ),
-                        ),
-                      );
+                    widget.onLock();
                   }
                 } finally {
                   switching = false;

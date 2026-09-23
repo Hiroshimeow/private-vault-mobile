@@ -41,6 +41,17 @@ class _FakeWorkProfileClient implements WorkProfileClient {
       const WorkProfileOperationResult.success();
 
   @override
+  Future<WorkProfileOperationResult> requestQuietModeDisabled() async =>
+      const WorkProfileOperationResult.success();
+
+  @override
+  Future<PickedWorkDocument?> pickWorkDocument() async => null;
+
+  @override
+  Future<WorkProfileOperationResult> openStore(String packageName) async =>
+      const WorkProfileOperationResult.success();
+
+  @override
   Future<WorkProfileOperationResult> clone(String packageName) async =>
       const WorkProfileOperationResult.success();
 

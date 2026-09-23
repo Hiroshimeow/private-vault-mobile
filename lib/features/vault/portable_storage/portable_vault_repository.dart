@@ -24,7 +24,12 @@ class PortableVaultRepository
   final PortableVaultStorage storage;
   final PortableVaultSession session;
   final PortableVaultObjectCodec objectCodec;
-  final Set<String> _activeStreamWriteIds = <String>{};
+
+  static final Expando<Set<String>> _activeWritesByStorage =
+      Expando<Set<String>>('portable-vault-active-writes');
+
+  Set<String> get _activeStreamWriteIds =>
+      _activeWritesByStorage[storage] ??= <String>{};
 
   @override
   bool get hasOpenSession => session.isOpen;

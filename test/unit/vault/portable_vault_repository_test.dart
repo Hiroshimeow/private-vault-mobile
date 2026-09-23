@@ -457,6 +457,41 @@ void main() {
     expect(scan.hasProblems, isFalse);
   });
 
+  test(
+    'second repository preserves a stale partial owned by an active writer',
+    () async {
+      final storage = _StalePartialSharedStorage();
+      final firstSession = PortableVaultSession();
+      final secondSession = PortableVaultSession();
+      await firstSession.open('0000');
+      await secondSession.open('0000');
+      final first = PortableVaultRepository(
+        storage: storage,
+        session: firstSession,
+      );
+      final second = PortableVaultRepository(
+        storage: storage,
+        session: secondSession,
+      );
+      final source = StreamController<List<int>>();
+
+      final import = first.addStream(source.stream, kind: VaultItemKind.video);
+      await storage.partialCreated.future;
+      expect(storage.hasPartial, isTrue);
+
+      final scanDuringWrite = await second.scan();
+      expect(storage.hasPartial, isTrue);
+      expect(scanDuringWrite.hasProblems, isFalse);
+
+      source.add([1, 2, 3, 4]);
+      await source.close();
+      final item = await import;
+
+      expect(storage.hasPartial, isFalse);
+      expect(await second.readBytes(item.id), Uint8List.fromList([1, 2, 3, 4]));
+    },
+  );
+
   test('scan reclaims legacy and future-dated abandoned partials', () async {
     final repo = await repository('0000');
     final material = repo.session.requireMaterial();
@@ -617,6 +652,115 @@ class _DeferredPortableVaultKeyDeriver extends PortableVaultKeyDeriver {
     final material = await super.derive(pin);
     if (call == 2) secondMaterial = material;
     return material;
+  }
+}
+
+class _StalePartialSharedStorage implements PortableVaultStreamingStorage {
+  final Map<String, Uint8List> _files = <String, Uint8List>{};
+  final Completer<String> partialCreated = Completer<String>();
+
+  bool get hasPartial => _files.keys.any((path) => path.contains('.partial-'));
+
+  @override
+  Future<bool> hasAccess() async => true;
+
+  @override
+  Future<List<String>> list(String path) async {
+    final prefix = path.isEmpty ? '' : '$path/';
+    return _files.keys
+        .where((candidate) => candidate.startsWith(prefix))
+        .map((candidate) => candidate.substring(prefix.length))
+        .where((name) => !name.contains('/'))
+        .toList(growable: false);
+  }
+
+  @override
+  Future<Uint8List> read(String path) async {
+    final value = _files[path];
+    if (value == null) {
+      throw const PortableVaultStorageNotFoundException();
+    }
+    return Uint8List.fromList(value);
+  }
+
+  @override
+  Future<void> write(String path, Uint8List bytes) async {
+    _files[path] = Uint8List.fromList(bytes);
+  }
+
+  @override
+  Future<void> delete(String path) async {
+    _files.remove(path);
+  }
+
+  @override
+  Future<PortableVaultWriteSession> beginWrite(String path) async {
+    final staleMillis = DateTime.now()
+        .subtract(const Duration(days: 2))
+        .millisecondsSinceEpoch;
+    final partial = '$path.partial-$staleMillis-shared';
+    _files[partial] = Uint8List(0);
+    if (!partialCreated.isCompleted) partialCreated.complete(partial);
+    return _MemoryWriteSession(
+      files: _files,
+      targetPath: path,
+      partialPath: partial,
+    );
+  }
+}
+
+class _MemoryWriteSession implements PortableVaultWriteSession {
+  _MemoryWriteSession({
+    required this.files,
+    required this.targetPath,
+    required this.partialPath,
+  });
+
+  final Map<String, Uint8List> files;
+  final String targetPath;
+  final String partialPath;
+  final List<int> _bytes = <int>[];
+  bool _closed = false;
+
+  void _ensureOpen() {
+    if (_closed) {
+      throw const PortableVaultStorageException('Write session is closed');
+    }
+    if (!files.containsKey(partialPath)) {
+      throw const PortableVaultStorageException('Active partial was reclaimed');
+    }
+  }
+
+  @override
+  Future<void> append(List<int> bytes) async {
+    _ensureOpen();
+    _bytes.addAll(bytes);
+    files[partialPath] = Uint8List.fromList(_bytes);
+  }
+
+  @override
+  Future<void> patch(int offset, List<int> bytes) async {
+    _ensureOpen();
+    if (offset < 0 || offset + bytes.length > _bytes.length) {
+      throw const PortableVaultStorageException('Invalid patch range');
+    }
+    _bytes.setRange(offset, offset + bytes.length, bytes);
+    files[partialPath] = Uint8List.fromList(_bytes);
+  }
+
+  @override
+  Future<void> commit() async {
+    _ensureOpen();
+    _closed = true;
+    files[targetPath] = Uint8List.fromList(_bytes);
+    files.remove(partialPath);
+  }
+
+  @override
+  Future<void> abort() async {
+    if (_closed) return;
+    _closed = true;
+    files.remove(partialPath);
   }
 }
 

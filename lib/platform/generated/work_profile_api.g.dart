@@ -197,6 +197,7 @@ class NativeManagedAppState {
     required this.hidden,
     required this.cloneEligibility,
     required this.installerActionRequired,
+    this.iconBytes,
   });
 
   String packageName;
@@ -219,6 +220,8 @@ class NativeManagedAppState {
 
   bool installerActionRequired;
 
+  Uint8List? iconBytes;
+
   List<Object?> _toList() {
     return <Object?>[
       packageName,
@@ -231,6 +234,7 @@ class NativeManagedAppState {
       hidden,
       cloneEligibility,
       installerActionRequired,
+      iconBytes,
     ];
   }
 
@@ -251,6 +255,7 @@ class NativeManagedAppState {
       hidden: result[7]! as bool,
       cloneEligibility: result[8]! as NativeCloneEligibility,
       installerActionRequired: result[9]! as bool,
+      iconBytes: result[10] as Uint8List?,
     );
   }
 
@@ -272,7 +277,8 @@ class NativeManagedAppState {
         _deepEquals(suspended, other.suspended) &&
         _deepEquals(hidden, other.hidden) &&
         _deepEquals(cloneEligibility, other.cloneEligibility) &&
-        _deepEquals(installerActionRequired, other.installerActionRequired);
+        _deepEquals(installerActionRequired, other.installerActionRequired) &&
+        _deepEquals(iconBytes, other.iconBytes);
   }
 
   @override
@@ -281,7 +287,72 @@ class NativeManagedAppState {
 
   @override
   String toString() {
-    return 'NativeManagedAppState(packageName: $packageName, label: $label, presentPersonal: $presentPersonal, presentWork: $presentWork, launchableWork: $launchableWork, systemApp: $systemApp, suspended: $suspended, hidden: $hidden, cloneEligibility: $cloneEligibility, installerActionRequired: $installerActionRequired)';
+    return 'NativeManagedAppState(packageName: $packageName, label: $label, presentPersonal: $presentPersonal, presentWork: $presentWork, launchableWork: $launchableWork, systemApp: $systemApp, suspended: $suspended, hidden: $hidden, cloneEligibility: $cloneEligibility, installerActionRequired: $installerActionRequired, iconBytes: $iconBytes)';
+  }
+}
+
+class NativePickedWorkDocument {
+  NativePickedWorkDocument({
+    required this.uri,
+    required this.displayName,
+    required this.mimeType,
+    this.sizeBytes,
+    required this.canDelete,
+  });
+
+  String uri;
+
+  String displayName;
+
+  String mimeType;
+
+  int? sizeBytes;
+
+  bool canDelete;
+
+  List<Object?> _toList() {
+    return <Object?>[uri, displayName, mimeType, sizeBytes, canDelete];
+  }
+
+  Object encode() {
+    return _toList();
+  }
+
+  static NativePickedWorkDocument decode(Object result) {
+    result as List<Object?>;
+    return NativePickedWorkDocument(
+      uri: result[0]! as String,
+      displayName: result[1]! as String,
+      mimeType: result[2]! as String,
+      sizeBytes: result[3] as int?,
+      canDelete: result[4]! as bool,
+    );
+  }
+
+  @override
+  // ignore: avoid_equals_and_hash_code_on_mutable_classes
+  bool operator ==(Object other) {
+    if (other is! NativePickedWorkDocument ||
+        other.runtimeType != runtimeType) {
+      return false;
+    }
+    if (identical(this, other)) {
+      return true;
+    }
+    return _deepEquals(uri, other.uri) &&
+        _deepEquals(displayName, other.displayName) &&
+        _deepEquals(mimeType, other.mimeType) &&
+        _deepEquals(sizeBytes, other.sizeBytes) &&
+        _deepEquals(canDelete, other.canDelete);
+  }
+
+  @override
+  // ignore: avoid_equals_and_hash_code_on_mutable_classes
+  int get hashCode => _deepHash(<Object?>[runtimeType, ..._toList()]);
+
+  @override
+  String toString() {
+    return 'NativePickedWorkDocument(uri: $uri, displayName: $displayName, mimeType: $mimeType, sizeBytes: $sizeBytes, canDelete: $canDelete)';
   }
 }
 
@@ -357,8 +428,11 @@ class _PigeonCodec extends StandardMessageCodec {
     } else if (value is NativeManagedAppState) {
       buffer.putUint8(133);
       writeValue(buffer, value.encode());
-    } else if (value is NativeOperationResult) {
+    } else if (value is NativePickedWorkDocument) {
       buffer.putUint8(134);
+      writeValue(buffer, value.encode());
+    } else if (value is NativeOperationResult) {
+      buffer.putUint8(135);
       writeValue(buffer, value.encode());
     } else {
       super.writeValue(buffer, value);
@@ -382,6 +456,8 @@ class _PigeonCodec extends StandardMessageCodec {
       case 133:
         return NativeManagedAppState.decode(readValue(buffer)!);
       case 134:
+        return NativePickedWorkDocument.decode(readValue(buffer)!);
+      case 135:
         return NativeOperationResult.decode(readValue(buffer)!);
       default:
         return super.readValueOfType(type, buffer);
@@ -447,6 +523,25 @@ class WorkProfileHostApi {
   Future<NativeOperationResult> startProvisioning() async {
     final pigeonVar_channelName =
         'dev.flutter.pigeon.private_vault_mobile.WorkProfileHostApi.startProvisioning$pigeonVar_messageChannelSuffix';
+    final pigeonVar_channel = BasicMessageChannel<Object?>(
+      pigeonVar_channelName,
+      pigeonChannelCodec,
+      binaryMessenger: pigeonVar_binaryMessenger,
+    );
+    final Future<Object?> pigeonVar_sendFuture = pigeonVar_channel.send(null);
+    final pigeonVar_replyList = await pigeonVar_sendFuture as List<Object?>?;
+
+    final Object? pigeonVar_replyValue = _extractReplyValueOrThrow(
+      pigeonVar_replyList,
+      pigeonVar_channelName,
+      isNullValid: false,
+    );
+    return pigeonVar_replyValue! as NativeOperationResult;
+  }
+
+  Future<NativeOperationResult> requestQuietModeDisabled() async {
+    final pigeonVar_channelName =
+        'dev.flutter.pigeon.private_vault_mobile.WorkProfileHostApi.requestQuietModeDisabled$pigeonVar_messageChannelSuffix';
     final pigeonVar_channel = BasicMessageChannel<Object?>(
       pigeonVar_channelName,
       pigeonChannelCodec,
@@ -548,6 +643,46 @@ class WorkProfileHostApi {
   Future<NativeOperationResult> launchWorkApp(String packageName) async {
     final pigeonVar_channelName =
         'dev.flutter.pigeon.private_vault_mobile.WorkProfileHostApi.launchWorkApp$pigeonVar_messageChannelSuffix';
+    final pigeonVar_channel = BasicMessageChannel<Object?>(
+      pigeonVar_channelName,
+      pigeonChannelCodec,
+      binaryMessenger: pigeonVar_binaryMessenger,
+    );
+    final Future<Object?> pigeonVar_sendFuture = pigeonVar_channel.send(
+      <Object?>[packageName],
+    );
+    final pigeonVar_replyList = await pigeonVar_sendFuture as List<Object?>?;
+
+    final Object? pigeonVar_replyValue = _extractReplyValueOrThrow(
+      pigeonVar_replyList,
+      pigeonVar_channelName,
+      isNullValid: false,
+    );
+    return pigeonVar_replyValue! as NativeOperationResult;
+  }
+
+  Future<NativePickedWorkDocument?> pickWorkDocument() async {
+    final pigeonVar_channelName =
+        'dev.flutter.pigeon.private_vault_mobile.WorkProfileHostApi.pickWorkDocument$pigeonVar_messageChannelSuffix';
+    final pigeonVar_channel = BasicMessageChannel<Object?>(
+      pigeonVar_channelName,
+      pigeonChannelCodec,
+      binaryMessenger: pigeonVar_binaryMessenger,
+    );
+    final Future<Object?> pigeonVar_sendFuture = pigeonVar_channel.send(null);
+    final pigeonVar_replyList = await pigeonVar_sendFuture as List<Object?>?;
+
+    final Object? pigeonVar_replyValue = _extractReplyValueOrThrow(
+      pigeonVar_replyList,
+      pigeonVar_channelName,
+      isNullValid: true,
+    );
+    return pigeonVar_replyValue as NativePickedWorkDocument?;
+  }
+
+  Future<NativeOperationResult> openWorkStore(String packageName) async {
+    final pigeonVar_channelName =
+        'dev.flutter.pigeon.private_vault_mobile.WorkProfileHostApi.openWorkStore$pigeonVar_messageChannelSuffix';
     final pigeonVar_channel = BasicMessageChannel<Object?>(
       pigeonVar_channelName,
       pigeonChannelCodec,

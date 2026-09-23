@@ -12,18 +12,54 @@ import android.content.Intent
 import android.content.IntentFilter
 import android.content.pm.ApplicationInfo
 import android.content.pm.PackageManager
+import android.graphics.Bitmap
+import android.graphics.Canvas
 import android.net.Uri
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.os.PersistableBundle
 import android.os.UserManager
+import android.provider.Settings
 import android.util.Base64
 import org.json.JSONArray
 import org.json.JSONObject
+import java.io.ByteArrayOutputStream
 import java.io.File
 import java.security.SecureRandom
 import java.util.UUID
+
+internal const val MAX_APP_ICON_BYTES = 64 * 1024
+internal const val MAX_APPS_JSON_BYTES = 256 * 1024
+internal const val APP_ICON_EDGE_PX = 96
+private const val MANAGED_PROFILE_SETTINGS_ACTION = "android.settings.MANAGED_PROFILE_SETTINGS"
+private const val MANAGE_USERS_PERMISSION = "android.permission.MANAGE_USERS"
+private const val MODIFY_QUIET_MODE_PERMISSION = "android.permission.MODIFY_QUIET_MODE"
+
+internal fun boundedAppIconPng(
+    packageManager: PackageManager,
+    app: ApplicationInfo,
+): ByteArray? = runCatching {
+    val drawable = app.loadIcon(packageManager)
+    val bitmap = Bitmap.createBitmap(
+        APP_ICON_EDGE_PX,
+        APP_ICON_EDGE_PX,
+        Bitmap.Config.ARGB_8888,
+    )
+    try {
+        val canvas = Canvas(bitmap)
+        drawable.setBounds(0, 0, APP_ICON_EDGE_PX, APP_ICON_EDGE_PX)
+        drawable.draw(canvas)
+        ByteArrayOutputStream().use { output ->
+            if (!bitmap.compress(Bitmap.CompressFormat.PNG, 100, output)) {
+                return@runCatching null
+            }
+            output.toByteArray().takeIf { it.size <= MAX_APP_ICON_BYTES }
+        }
+    } finally {
+        bitmap.recycle()
+    }
+}.getOrNull()
 
 internal object WorkProfileProtocol {
     const val ACTION_LIST_WORK_APPS =
@@ -34,6 +70,10 @@ internal object WorkProfileProtocol {
         "io.hiroshimeow.private_vault_mobile.action.CLONE"
     const val ACTION_LAUNCH =
         "io.hiroshimeow.private_vault_mobile.action.LAUNCH"
+    const val ACTION_PICK_WORK_DOCUMENT =
+        "io.hiroshimeow.private_vault_mobile.action.PICK_WORK_DOCUMENT"
+    const val ACTION_OPEN_STORE =
+        "io.hiroshimeow.private_vault_mobile.action.OPEN_STORE"
     const val ACTION_SHARE_VAULT_FILE =
         "io.hiroshimeow.private_vault_mobile.action.SHARE_VAULT_FILE"
     const val ACTION_SUSPEND =
@@ -54,6 +94,9 @@ internal object WorkProfileProtocol {
     const val EXTRA_BOOL_VALUE = "bool_value"
     const val EXTRA_MIME_TYPE = "mime_type"
     const val EXTRA_DISPLAY_NAME = "display_name"
+    const val EXTRA_URI = "uri"
+    const val EXTRA_SIZE_BYTES = "size_bytes"
+    const val EXTRA_CAN_DELETE = "can_delete"
     const val EXTRA_OK = "ok"
     const val EXTRA_ERROR_CODE = "error_code"
     const val EXTRA_MESSAGE = "message"
@@ -70,6 +113,8 @@ internal object WorkProfileProtocol {
         ACTION_GET_APP_STATE,
         ACTION_CLONE,
         ACTION_LAUNCH,
+        ACTION_PICK_WORK_DOCUMENT,
+        ACTION_OPEN_STORE,
         ACTION_SHARE_VAULT_FILE,
         ACTION_SUSPEND,
         ACTION_HIDE,
@@ -359,6 +404,90 @@ class WorkProfileHostApiAdapter(
         }
     }
 
+    override fun requestQuietModeDisabled(
+        callback: (Result<NativeOperationResult>) -> Unit,
+    ) {
+        val otherProfile =
+            userManager.userProfiles.firstOrNull { it != android.os.Process.myUserHandle() }
+        if (otherProfile == null) {
+            callback(Result.success(failure(NativeWorkProfileErrorCode.PROFILE_ABSENT)))
+            return
+        }
+
+        val authorizedCaller =
+            context.checkSelfPermission(MANAGE_USERS_PERMISSION) == PackageManager.PERMISSION_GRANTED ||
+                context.checkSelfPermission(MODIFY_QUIET_MODE_PERMISSION) == PackageManager.PERMISSION_GRANTED ||
+                isDefaultLauncher()
+        if (WorkProfileNativePolicy.shouldRequestQuietModeDirectly(Build.VERSION.SDK_INT, authorizedCaller)) {
+            try {
+                if (userManager.requestQuietModeEnabled(false, otherProfile)) {
+                    callback(Result.success(NativeOperationResult(true, null, null)))
+                    return
+                }
+            } catch (_: SecurityException) {
+                // Fall through to system-managed settings; do not claim direct recovery succeeded.
+            }
+        }
+
+        launchQuietModeSettings(callback)
+    }
+
+    private fun isDefaultLauncher(): Boolean {
+        val homeIntent = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME)
+        val resolved = context.packageManager.resolveActivity(homeIntent, PackageManager.MATCH_DEFAULT_ONLY)
+        return resolved?.activityInfo?.packageName == context.packageName
+    }
+
+    private fun launchQuietModeSettings(callback: (Result<NativeOperationResult>) -> Unit) {
+        val managedProfileSettings = Intent(MANAGED_PROFILE_SETTINGS_ACTION)
+        val intent = if (context.packageManager.resolveActivity(managedProfileSettings, 0) != null) {
+            managedProfileSettings
+        } else {
+            Intent(Settings.ACTION_SETTINGS)
+        }
+        val requestCode = allocateRequestCode()
+        pendingResults[requestCode] = { _, _ ->
+            callback(Result.success(NativeOperationResult(true, null, null)))
+        }
+        try {
+            activity.startActivityForResult(intent, requestCode)
+        } catch (_: SecurityException) {
+            pendingResults.remove(requestCode)
+            val fallback = Intent(Settings.ACTION_SETTINGS)
+            if (intent.action != Settings.ACTION_SETTINGS && context.packageManager.resolveActivity(fallback, 0) != null) {
+                pendingResults[requestCode] = { _, _ ->
+                    callback(Result.success(NativeOperationResult(true, null, null)))
+                }
+                try {
+                    activity.startActivityForResult(fallback, requestCode)
+                    return
+                } catch (_: Exception) {
+                    pendingResults.remove(requestCode)
+                }
+            }
+            callback(
+                Result.success(
+                    NativeOperationResult(
+                        false,
+                        NativeWorkProfileErrorCode.USER_ACTION_REQUIRED,
+                        "Turn Work Profile on from Android Quick Settings or system settings, then retry.",
+                    ),
+                ),
+            )
+        } catch (error: Exception) {
+            pendingResults.remove(requestCode)
+            callback(
+                Result.success(
+                    NativeOperationResult(
+                        false,
+                        NativeWorkProfileErrorCode.OEM_UNSUPPORTED,
+                        error.message,
+                    ),
+                ),
+            )
+        }
+    }
+
     override fun listPersonalApps(): List<NativeManagedAppState> {
         if (isProfileOwner()) return emptyList()
         val launcher = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER)
@@ -456,6 +585,26 @@ class WorkProfileHostApiAdapter(
     ) {
         launchOperation(
             bridgeIntent(WorkProfileProtocol.ACTION_LAUNCH)
+                .putExtra(WorkProfileProtocol.EXTRA_PACKAGE_NAME, packageName),
+            callback,
+        )
+    }
+
+    override fun pickWorkDocument(
+        callback: (Result<NativePickedWorkDocument?>) -> Unit,
+    ) {
+        launchDocumentResult(
+            bridgeIntent(WorkProfileProtocol.ACTION_PICK_WORK_DOCUMENT),
+            callback,
+        )
+    }
+
+    override fun openWorkStore(
+        packageName: String,
+        callback: (Result<NativeOperationResult>) -> Unit,
+    ) {
+        launchOperation(
+            bridgeIntent(WorkProfileProtocol.ACTION_OPEN_STORE)
                 .putExtra(WorkProfileProtocol.EXTRA_PACKAGE_NAME, packageName),
             callback,
         )
@@ -671,6 +820,96 @@ class WorkProfileHostApiAdapter(
         }
     }
 
+    private fun launchDocumentResult(
+        intent: Intent,
+        callback: (Result<NativePickedWorkDocument?>) -> Unit,
+    ) {
+        val requestCode = allocateRequestCode()
+        WorkProfileResultRegistry.register(
+            requestId = requestCode,
+            timeoutMs = WorkProfileNativePolicy.bridgeTimeoutMs(intent.action),
+            timeoutCode = WorkProfileNativePolicy.bridgeTimeoutError(intent.action),
+        ) { resultCode, data ->
+            try {
+                val typedError = data?.getStringExtra(WorkProfileProtocol.EXTRA_ERROR_CODE)
+                if (typedError != null) {
+                    callback(
+                        Result.failure(
+                            FlutterError(
+                                typedError,
+                                data.getStringExtra(WorkProfileProtocol.EXTRA_MESSAGE),
+                            ),
+                        ),
+                    )
+                    return@register
+                }
+                if (resultCode == Activity.RESULT_CANCELED) {
+                    callback(Result.success(null))
+                    return@register
+                }
+                if (resultCode != Activity.RESULT_OK || data == null) {
+                    throw FlutterError(
+                        NativeWorkProfileErrorCode.OEM_UNSUPPORTED.name,
+                        data?.getStringExtra(WorkProfileProtocol.EXTRA_MESSAGE)
+                            ?: "Work Profile did not return a selected document.",
+                    )
+                }
+                val rawUri = data.getStringExtra(WorkProfileProtocol.EXTRA_URI)
+                    ?: throw FlutterError(
+                        NativeWorkProfileErrorCode.PACKAGE_INELIGIBLE.name,
+                        "Selected document URI is missing.",
+                    )
+                callback(
+                    Result.success(
+                        NativePickedWorkDocument(
+                            uri = rawUri,
+                            displayName =
+                                data.getStringExtra(WorkProfileProtocol.EXTRA_DISPLAY_NAME)
+                                    ?: "selected-file",
+                            mimeType =
+                                data.getStringExtra(WorkProfileProtocol.EXTRA_MIME_TYPE)
+                                    ?: "application/octet-stream",
+                            sizeBytes =
+                                if (data.hasExtra(WorkProfileProtocol.EXTRA_SIZE_BYTES)) {
+                                    data.getLongExtra(
+                                        WorkProfileProtocol.EXTRA_SIZE_BYTES,
+                                        0L,
+                                    )
+                                } else {
+                                    null
+                                },
+                            canDelete =
+                                data.getBooleanExtra(
+                                    WorkProfileProtocol.EXTRA_CAN_DELETE,
+                                    false,
+                                ),
+                        ),
+                    ),
+                )
+            } catch (error: Exception) {
+                callback(Result.failure(error))
+            }
+        }
+        try {
+            activity.startActivity(
+                intent.putExtra(
+                    WorkProfileProtocol.EXTRA_RESULT_PENDING_INTENT,
+                    bridgeResultPendingIntent(requestCode),
+                ),
+            )
+        } catch (error: Exception) {
+            WorkProfileResultRegistry.cancel(requestCode)
+            callback(
+                Result.failure(
+                    FlutterError(
+                        NativeWorkProfileErrorCode.OEM_UNSUPPORTED.name,
+                        error.message,
+                    ),
+                ),
+            )
+        }
+    }
+
     private fun operationResult(resultCode: Int, data: Intent?): NativeOperationResult {
         val typedError =
             data?.getStringExtra(WorkProfileProtocol.EXTRA_ERROR_CODE)
@@ -715,6 +954,14 @@ class WorkProfileHostApiAdapter(
                 NativeCloneEligibility.valueOf(json.getString("cloneEligibility"))
             }.getOrDefault(NativeCloneEligibility.UNSUPPORTED),
             installerActionRequired = json.optBoolean("installerActionRequired", false),
+            iconBytes =
+                json.optString("iconBase64")
+                    .takeIf { it.isNotBlank() }
+                    ?.let { encoded ->
+                        runCatching { Base64.decode(encoded, Base64.DEFAULT) }
+                            .getOrNull()
+                            ?.takeIf { it.size <= MAX_APP_ICON_BYTES }
+                    },
         )
 
     private fun personalPackageState(packageName: String): NativeManagedAppState? {
@@ -737,6 +984,7 @@ class WorkProfileHostApiAdapter(
                     NativeCloneEligibility.ELIGIBLE
                 },
                 installerActionRequired = !system,
+                iconBytes = boundedAppIconPng(context.packageManager, app),
             )
         } catch (_: PackageManager.NameNotFoundException) {
             null

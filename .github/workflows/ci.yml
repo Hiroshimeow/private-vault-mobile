@@ -48,7 +48,7 @@ jobs:
         run: flutter test test/unit/logging_contract_test.dart test/unit/platform_privacy_contract_test.dart test/unit/work_profile_android_contract_test.dart test/unit/work_profile_native_contract_test.dart test/unit/work_profile_models_test.dart test/widget/work_profile_navigation_test.dart test/widget/work_profile_home_test.dart
 
   android:
-    name: Android debug + release smoke
+    name: Android debug + signing contract
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -78,8 +78,47 @@ jobs:
       - name: Build debug APK
         run: flutter build apk --debug
 
-      - name: Build release APK smoke
-        run: flutter build apk --release
+      - name: Verify release signing fails closed without secrets
+        shell: bash
+        run: |
+          set +e
+          output="$(flutter build apk --release 2>&1)"
+          status=$?
+          set -e
+          printf '%s\n' "$output"
+          test "$status" -ne 0
+          grep -F "Release signing is not configured." <<< "$output"
+
+      - name: Verify aggregate Android build fails closed without secrets
+        working-directory: android
+        shell: bash
+        run: |
+          set +e
+          output="$(./gradlew :app:assemble --dry-run 2>&1)"
+          status=$?
+          set -e
+          printf '%s\n' "$output"
+          test "$status" -ne 0
+          grep -F "Release signing is not configured." <<< "$output"
+
+      - name: Verify release-variant development tasks do not require signing
+        working-directory: android
+        shell: bash
+        run: |
+          ./gradlew :app:testReleaseUnitTest --dry-run
+          ./gradlew :app:compileReleaseKotlin --dry-run
+
+      - name: Verify unrelated modules do not require app signing
+        working-directory: android
+        shell: bash
+        run: |
+          set +e
+          build_output="$(./gradlew :android_file_picker:build --dry-run 2>&1)"
+          release_output="$(./gradlew :android_file_picker:assembleRelease --dry-run 2>&1)"
+          set -e
+          printf '%s\n%s\n' "$build_output" "$release_output"
+          ! grep -F "Release signing is not configured." <<< "$build_output"
+          ! grep -F "Release signing is not configured." <<< "$release_output"
 
       - name: Upload Android debug artifact
         uses: actions/upload-artifact@v7

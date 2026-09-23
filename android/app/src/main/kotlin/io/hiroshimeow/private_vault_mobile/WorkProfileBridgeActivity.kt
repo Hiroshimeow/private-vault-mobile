@@ -15,6 +15,8 @@ import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
+import android.provider.OpenableColumns
+import android.util.Base64
 import org.json.JSONArray
 import org.json.JSONObject
 import java.security.MessageDigest
@@ -87,6 +89,8 @@ class WorkProfileBridgeActivity : Activity() {
             }
             WorkProfileProtocol.ACTION_CLONE -> clone(intent)
             WorkProfileProtocol.ACTION_LAUNCH -> launch(intent)
+            WorkProfileProtocol.ACTION_PICK_WORK_DOCUMENT -> pickWorkDocument()
+            WorkProfileProtocol.ACTION_OPEN_STORE -> openStore(intent)
             WorkProfileProtocol.ACTION_SHARE_VAULT_FILE -> shareVaultFile(intent)
             WorkProfileProtocol.ACTION_SUSPEND -> suspend(intent)
             WorkProfileProtocol.ACTION_HIDE -> hide(intent)
@@ -353,6 +357,51 @@ class WorkProfileBridgeActivity : Activity() {
         }
     }
 
+    private fun pickWorkDocument() {
+        val picker = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+            addCategory(Intent.CATEGORY_OPENABLE)
+            type = "*/*"
+            addFlags(
+                Intent.FLAG_GRANT_READ_URI_PERMISSION or
+                    Intent.FLAG_GRANT_WRITE_URI_PERMISSION,
+            )
+        }
+        try {
+            startActivityForResult(picker, REQUEST_PICK_WORK_DOCUMENT)
+        } catch (error: Exception) {
+            finishFailure(NativeWorkProfileErrorCode.OEM_UNSUPPORTED, error.message)
+        }
+    }
+
+    private fun openStore(intent: Intent) {
+        val targetPackage =
+            intent.getStringExtra(WorkProfileProtocol.EXTRA_PACKAGE_NAME)
+                ?: return finishFailure(
+                    NativeWorkProfileErrorCode.PACKAGE_INELIGIBLE,
+                    "Missing package name.",
+                )
+        val candidates =
+            listOf(
+                Intent(Intent.ACTION_VIEW, Uri.parse("market://details?id=$targetPackage")),
+                Intent(
+                    Intent.ACTION_VIEW,
+                    Uri.parse("https://play.google.com/store/apps/details?id=$targetPackage"),
+                ),
+            )
+        val storeIntent =
+            candidates.firstOrNull { packageManager.resolveActivity(it, 0) != null }
+                ?: return finishFailure(
+                    NativeWorkProfileErrorCode.STORE_FALLBACK_REQUIRED,
+                    "No app store is available inside the Work Profile.",
+                )
+        try {
+            startActivity(storeIntent)
+            finishSuccess()
+        } catch (error: Exception) {
+            finishFailure(NativeWorkProfileErrorCode.OEM_UNSUPPORTED, error.message)
+        }
+    }
+
     private fun shareVaultFile(intent: Intent) {
         val targetPackage =
             intent.getStringExtra(WorkProfileProtocol.EXTRA_PACKAGE_NAME)
@@ -602,8 +651,74 @@ class WorkProfileBridgeActivity : Activity() {
                 // PackageInstaller's status callback is authoritative.
                 return
             }
+            REQUEST_PICK_WORK_DOCUMENT -> {
+                handlePickedWorkDocument(resultCode, data)
+                return
+            }
         }
         super.onActivityResult(requestCode, resultCode, data)
+    }
+
+    private fun handlePickedWorkDocument(resultCode: Int, data: Intent?) {
+        if (resultCode != RESULT_OK || data?.data == null) {
+            sendResultAndFinish(RESULT_CANCELED, Intent())
+            return
+        }
+        val uri = data.data ?: run {
+            sendResultAndFinish(RESULT_CANCELED, Intent())
+            return
+        }
+        val grantFlags =
+            data.flags and
+                (Intent.FLAG_GRANT_READ_URI_PERMISSION or
+                    Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
+        val metadata =
+            runCatching {
+                contentResolver.query(
+                    uri,
+                    arrayOf(OpenableColumns.DISPLAY_NAME, OpenableColumns.SIZE),
+                    null,
+                    null,
+                    null,
+                )?.use { cursor ->
+                    if (!cursor.moveToFirst()) return@use Pair<String?, Long?>(null, null)
+                    val nameIndex = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+                    val sizeIndex = cursor.getColumnIndex(OpenableColumns.SIZE)
+                    val name =
+                        if (nameIndex >= 0 && !cursor.isNull(nameIndex)) {
+                            cursor.getString(nameIndex)
+                        } else {
+                            null
+                        }
+                    val size =
+                        if (sizeIndex >= 0 && !cursor.isNull(sizeIndex)) {
+                            cursor.getLong(sizeIndex)
+                        } else {
+                            null
+                        }
+                    Pair(name, size)
+                }
+            }.getOrNull()
+        val displayName = metadata?.first?.takeIf { it.isNotBlank() } ?: "selected-file"
+        val sizeBytes = metadata?.second
+        val mimeType = contentResolver.getType(uri) ?: "application/octet-stream"
+        val result =
+            successIntent()
+                .putExtra(WorkProfileProtocol.EXTRA_URI, uri.toString())
+                .putExtra(WorkProfileProtocol.EXTRA_DISPLAY_NAME, displayName)
+                .putExtra(WorkProfileProtocol.EXTRA_MIME_TYPE, mimeType)
+                .putExtra(
+                    WorkProfileProtocol.EXTRA_CAN_DELETE,
+                    grantFlags and Intent.FLAG_GRANT_WRITE_URI_PERMISSION != 0,
+                )
+                .apply {
+                    if (sizeBytes != null) {
+                        putExtra(WorkProfileProtocol.EXTRA_SIZE_BYTES, sizeBytes)
+                    }
+                    clipData = ClipData.newRawUri(displayName, uri)
+                    addFlags(grantFlags)
+                }
+        sendResultAndFinish(RESULT_OK, result)
     }
 
     private fun visibleManagedApps(): List<NativeManagedAppState> {
@@ -635,6 +750,7 @@ class WorkProfileBridgeActivity : Activity() {
                 hidden = hidden,
                 cloneEligibility = NativeCloneEligibility.ALREADY_INSTALLED,
                 installerActionRequired = false,
+                iconBytes = boundedAppIconPng(packageManager, app),
             )
         } catch (_: PackageManager.NameNotFoundException) {
             null
@@ -642,8 +758,23 @@ class WorkProfileBridgeActivity : Activity() {
     }
 
     private fun finishApps(apps: List<NativeManagedAppState>) {
+        val metadataArray = JSONArray()
+        apps.forEach { metadataArray.put(it.toJson(includeIcon = false)) }
+        val metadataBytes = metadataArray.toString().toByteArray(Charsets.UTF_8).size
+        val iconPayloadDeltas = apps.map { app ->
+            val withoutIcon = app.toJson(includeIcon = false).toString().toByteArray(Charsets.UTF_8).size
+            val withIcon = app.toJson(includeIcon = true).toString().toByteArray(Charsets.UTF_8).size
+            (withIcon - withoutIcon).coerceAtLeast(0)
+        }
+        val includeIcons = WorkProfileNativePolicy.iconInclusionMask(
+            metadataPayloadBytes = metadataBytes,
+            iconPayloadDeltas = iconPayloadDeltas,
+            maxPayloadBytes = MAX_APPS_JSON_BYTES,
+        )
         val array = JSONArray()
-        apps.forEach { array.put(it.toJson()) }
+        apps.zip(includeIcons).forEach { (app, includeIcon) ->
+            array.put(app.toJson(includeIcon = includeIcon))
+        }
         sendResultAndFinish(
             RESULT_OK,
             successIntent().putExtra(WorkProfileProtocol.EXTRA_APPS_JSON, array.toString()),
@@ -746,7 +877,7 @@ class WorkProfileBridgeActivity : Activity() {
             .apply()
     }
 
-    private fun NativeManagedAppState.toJson(): JSONObject = JSONObject()
+    private fun NativeManagedAppState.toJson(includeIcon: Boolean = true): JSONObject = JSONObject()
         .put("packageName", packageName)
         .put("label", label)
         .put("presentPersonal", presentPersonal)
@@ -757,10 +888,16 @@ class WorkProfileBridgeActivity : Activity() {
         .put("hidden", hidden)
         .put("cloneEligibility", cloneEligibility.name)
         .put("installerActionRequired", installerActionRequired)
+        .apply {
+            if (includeIcon && iconBytes != null) {
+                put("iconBase64", Base64.encodeToString(iconBytes, Base64.NO_WRAP))
+            }
+        }
 
     companion object {
         private const val REQUEST_INSTALL_CONFIRMATION = 9411
         private const val REQUEST_UNINSTALL_CONFIRMATION = 9412
+        private const val REQUEST_PICK_WORK_DOCUMENT = 9413
         private const val PREFS_NAME = "work_profile_apps"
         private const val PREF_MANAGED_PACKAGES = "managed_packages"
     }

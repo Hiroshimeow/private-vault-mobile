@@ -10,6 +10,8 @@ import android.os.Bundle
 import android.provider.DocumentsContract
 import android.view.WindowManager
 import java.io.ByteArrayOutputStream
+import java.io.InputStream
+import java.util.UUID
 import io.flutter.embedding.android.FlutterFragmentActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
@@ -18,6 +20,7 @@ class MainActivity : FlutterFragmentActivity() {
     private val channelName = "private_vault/platform"
     private var workProfileApiAdapter: WorkProfileHostApiAdapter? = null
     private var portableVaultTreeBridge: PortableVaultTreeBridge? = null
+    private val documentStreams = mutableMapOf<String, InputStream>()
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -53,6 +56,55 @@ class MainActivity : FlutterFragmentActivity() {
                         } else {
                             result.error("invalid_choice", "Unknown disguise choice", null)
                         }
+                    }
+                    "openDocumentStream" -> {
+                        val rawUri = call.argument<String>("uri")
+                        if (rawUri == null) {
+                            result.error("invalid_uri", "Missing source URI", null)
+                        } else {
+                            try {
+                                val uri = Uri.parse(rawUri)
+                                require(uri.scheme == ContentResolver.SCHEME_CONTENT) {
+                                    "Only content URIs can be streamed through Android SAF"
+                                }
+                                val input = contentResolver.openInputStream(uri)
+                                    ?: throw IllegalStateException("Unable to open source URI")
+                                val token = UUID.randomUUID().toString()
+                                documentStreams[token] = input
+                                result.success(token)
+                            } catch (error: SecurityException) {
+                                result.error("permission_denied", error.message, null)
+                            } catch (error: Exception) {
+                                result.error("open_failed", error.message, null)
+                            }
+                        }
+                    }
+                    "readDocumentStream" -> {
+                        val token = call.argument<String>("token")
+                        val requested = call.argument<Int>("maxBytes") ?: 64 * 1024
+                        val input = token?.let(documentStreams::get)
+                        if (token == null || input == null) {
+                            result.error("invalid_stream", "Document stream is unavailable", null)
+                        } else {
+                            try {
+                                val buffer = ByteArray(requested.coerceIn(1, 64 * 1024))
+                                val count = input.read(buffer)
+                                if (count < 0) {
+                                    documentStreams.remove(token)?.close()
+                                    result.success(null)
+                                } else {
+                                    result.success(buffer.copyOf(count))
+                                }
+                            } catch (error: Exception) {
+                                documentStreams.remove(token)?.runCatching { close() }
+                                result.error("read_failed", error.message, null)
+                            }
+                        }
+                    }
+                    "closeDocumentStream" -> {
+                        val token = call.argument<String>("token")
+                        token?.let { documentStreams.remove(it)?.runCatching { close() } }
+                        result.success(null)
                     }
                     "deleteDocumentUri" -> {
                         val rawUri = call.argument<String>("uri")
@@ -100,6 +152,8 @@ class MainActivity : FlutterFragmentActivity() {
     override fun cleanUpFlutterEngine(flutterEngine: FlutterEngine) {
         portableVaultTreeBridge?.dispose()
         portableVaultTreeBridge = null
+        documentStreams.values.forEach { input -> runCatching { input.close() } }
+        documentStreams.clear()
         WorkProfileHostApi.setUp(flutterEngine.dartExecutor.binaryMessenger, null)
         workProfileApiAdapter = null
         super.cleanUpFlutterEngine(flutterEngine)

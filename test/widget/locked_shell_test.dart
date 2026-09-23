@@ -932,10 +932,10 @@ void main() {
       await tester.tap(find.byKey(const Key('settings-save-pin')));
       await tester.pumpAndSettle();
 
-      expect(
-        find.text('PIN changed. Unlock again with the new PIN.'),
-        findsOneWidget,
-      );
+      expect(lock.isLocked, isTrue);
+      expect(find.text('Settings'), findsNothing);
+      expect(find.text('Switch Vault PIN'), findsNothing);
+      expect(find.byKey(const Key('cover-title')), findsOneWidget);
     },
   );
 

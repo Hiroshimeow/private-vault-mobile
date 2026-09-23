@@ -4,15 +4,25 @@ import 'package:flutter/material.dart';
 import 'package:private_vault_mobile/features/apps/vault_shuttle_service.dart';
 import 'package:private_vault_mobile/features/apps/work_profile_client.dart';
 import 'package:private_vault_mobile/features/apps/work_profile_models.dart';
+import 'package:private_vault_mobile/features/media/media_vault_service.dart';
+import 'package:private_vault_mobile/platform/media_source_bridge.dart';
 import 'package:private_vault_mobile/features/vault/vault_repository.dart';
 
 enum _AppScope { personal, isolated }
 
 class WorkProfileHome extends StatefulWidget {
-  const WorkProfileHome({super.key, required this.client, this.vaultShuttle});
+  const WorkProfileHome({
+    super.key,
+    required this.client,
+    this.vaultShuttle,
+    this.mediaService,
+    this.importAllowed,
+  });
 
   final WorkProfileClient client;
   final VaultShuttle? vaultShuttle;
+  final MediaVaultService? mediaService;
+  final ValueGetter<bool>? importAllowed;
 
   @override
   State<WorkProfileHome> createState() => _WorkProfileHomeState();
@@ -24,6 +34,10 @@ class _WorkProfileHomeState extends State<WorkProfileHome> {
   bool _loading = true;
   String? _message;
   _AppScope _scope = _AppScope.personal;
+  Future<void>? _refreshFuture;
+  bool _quietRecoveryInFlight = false;
+  bool _importInFlight = false;
+  final Set<String> _storeFallbackPackages = <String>{};
 
   @override
   void initState() {
@@ -31,11 +45,26 @@ class _WorkProfileHomeState extends State<WorkProfileHome> {
     unawaited(_refresh());
   }
 
-  Future<void> _refresh() async {
-    setState(() {
-      _loading = true;
-      _message = null;
+  Future<void> _refresh() {
+    final current = _refreshFuture;
+    if (current != null) return current;
+    final future = _refreshOnce();
+    _refreshFuture = future;
+    future.whenComplete(() {
+      if (identical(_refreshFuture, future)) {
+        _refreshFuture = null;
+      }
     });
+    return future;
+  }
+
+  Future<void> _refreshOnce() async {
+    if (mounted) {
+      setState(() {
+        _loading = true;
+        _message = null;
+      });
+    }
     try {
       final capability = await widget.client.getCapability();
       final apps = capability.profileState == WorkProfileState.ready
@@ -66,6 +95,135 @@ class _WorkProfileHomeState extends State<WorkProfileHome> {
     setState(() {
       _message = result.message ?? 'Work-profile provisioning was not allowed.';
     });
+  }
+
+  Future<void> _recoverQuietProfile() async {
+    if (_quietRecoveryInFlight) return;
+    setState(() => _quietRecoveryInFlight = true);
+    try {
+      final result = await widget.client.requestQuietModeDisabled();
+      if (!mounted) return;
+      if (!result.ok) {
+        setState(() {
+          _message =
+              result.message ??
+              'Turn Work Profile on from Android system settings, then retry.';
+        });
+        return;
+      }
+      for (var attempt = 0; attempt < 15 && mounted; attempt++) {
+        await _refresh();
+        if (!mounted || _capability?.profileState == WorkProfileState.ready) {
+          return;
+        }
+        await Future<void>.delayed(const Duration(milliseconds: 200));
+      }
+      if (mounted) {
+        setState(() {
+          _message = 'Android has not finished enabling Work Profile. Check system settings and retry.';
+        });
+      }
+    } finally {
+      if (mounted) setState(() => _quietRecoveryInFlight = false);
+    }
+  }
+
+  Future<void> _importFromWorkProfile({required bool moveSource}) async {
+    final mediaService = widget.mediaService;
+    if (mediaService == null || _importInFlight) return;
+    setState(() {
+      _importInFlight = true;
+      _message = 'Choose a Work Profile file…';
+    });
+    try {
+      final picked = await widget.client.pickWorkDocument();
+      if (picked == null || !mounted) {
+        if (mounted) setState(() => _message = null);
+        return;
+      }
+      final bridge = const PlatformMediaSourceBridge();
+      final source = PickedVaultSource(
+        name: picked.displayName,
+        kind: _kindForWorkDocument(picked),
+        openRead: () => _guardedWorkDocumentStream(bridge, picked.uri),
+        deleteSource: picked.canDelete
+            ? () async {
+                _requireImportAllowed();
+                await bridge.delete(picked.uri);
+              }
+            : null,
+      );
+      final result = await mediaService.importSources([
+        source,
+      ], moveSource: moveSource);
+      if (!mounted) return;
+      if (result.imported.isNotEmpty && result.failures.isEmpty) {
+        setState(() {
+          _message = moveSource
+              ? 'Moved ${picked.displayName} into Vault.'
+              : 'Copied ${picked.displayName} into Vault.';
+        });
+      } else if (result.imported.isNotEmpty) {
+        setState(() {
+          _message =
+              'Encrypted copy saved, but the Work Profile source was retained.';
+        });
+      } else {
+        setState(() {
+          _message = 'Unable to import ${picked.displayName}. Source retained.';
+        });
+      }
+    } on WorkProfileOperationException catch (error) {
+      if (mounted) {
+        setState(() {
+          _message =
+              error.message ??
+              'Work Profile import failed (${error.errorCode.name}).';
+        });
+      }
+    } on Object catch (error) {
+      if (mounted) {
+        setState(() => _message = 'Work Profile import failed: $error');
+      }
+    } finally {
+      if (mounted) setState(() => _importInFlight = false);
+    }
+  }
+
+  bool get _importStillAllowed =>
+      mounted && (widget.importAllowed?.call() ?? true);
+
+  void _requireImportAllowed() {
+    if (!_importStillAllowed) {
+      throw StateError('Vault locked during Work Profile import');
+    }
+  }
+
+  Stream<List<int>> _guardedWorkDocumentStream(
+    PlatformMediaSourceBridge bridge,
+    Uri uri,
+  ) async* {
+    _requireImportAllowed();
+    await for (final chunk in bridge.openRead(uri)) {
+      _requireImportAllowed();
+      yield chunk;
+    }
+    _requireImportAllowed();
+  }
+
+  VaultItemKind _kindForWorkDocument(PickedWorkDocument source) {
+    final mime = source.mimeType.toLowerCase();
+    if (mime.startsWith('image/')) return VaultItemKind.image;
+    if (mime.startsWith('video/')) return VaultItemKind.video;
+    if (mime != 'application/octet-stream') return VaultItemKind.document;
+    final name = source.displayName.toLowerCase();
+    if (RegExp(r'\.(png|jpe?g|gif|webp|heic)$').hasMatch(name)) {
+      return VaultItemKind.image;
+    }
+    if (RegExp(r'\.(mp4|mov|m4v|webm|mkv)$').hasMatch(name)) {
+      return VaultItemKind.video;
+    }
+    return VaultItemKind.document;
   }
 
   Future<void> _shareVaultFile(ManagedAppState app) async {
@@ -164,14 +322,36 @@ class _WorkProfileHomeState extends State<WorkProfileHome> {
       final result = await action();
       if (!mounted) return;
       setState(() {
+        if (result.errorCode == WorkProfileErrorCode.storeFallbackRequired) {
+          _storeFallbackPackages.add(app.packageName);
+        }
         _message = result.ok
             ? '${app.label} updated.'
             : result.message ?? 'Android rejected this operation.';
       });
-      if (result.ok) unawaited(_refresh());
+      if (result.ok) {
+        _storeFallbackPackages.remove(app.packageName);
+        unawaited(_refresh());
+      }
     } on Object {
       if (!mounted) return;
       setState(() => _message = 'Android work-profile operation failed.');
+    }
+  }
+
+  Future<void> _openStore(ManagedAppState app) async {
+    try {
+      final result = await widget.client.openStore(app.packageName);
+      if (!mounted) return;
+      setState(() {
+        _message = result.ok
+            ? 'Opened the Work Profile app store for ${app.label}.'
+            : result.message ?? 'No managed-profile app store is available.';
+      });
+      if (result.ok) unawaited(_refresh());
+    } on Object {
+      if (!mounted) return;
+      setState(() => _message = 'Unable to open the Work Profile app store.');
     }
   }
 
@@ -271,10 +451,26 @@ class _WorkProfileHomeState extends State<WorkProfileHome> {
                 label: const Text('Enable isolated apps'),
               )
             : capability.profileState == WorkProfileState.quiet
-            ? OutlinedButton.icon(
-                onPressed: _refresh,
-                icon: const Icon(Icons.refresh),
-                label: const Text('Check again'),
+            ? Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  FilledButton.icon(
+                    onPressed: _quietRecoveryInFlight
+                        ? null
+                        : _recoverQuietProfile,
+                    icon: const Icon(Icons.play_arrow_outlined),
+                    label: Text(
+                      _quietRecoveryInFlight
+                          ? 'Turning on…'
+                          : 'Turn on Work Profile',
+                    ),
+                  ),
+                  TextButton.icon(
+                    onPressed: _quietRecoveryInFlight ? null : _refresh,
+                    icon: const Icon(Icons.refresh),
+                    label: const Text('Check again'),
+                  ),
+                ],
               )
             : null,
         footer: _message,
@@ -329,6 +525,32 @@ class _WorkProfileHomeState extends State<WorkProfileHome> {
             const SizedBox(height: 12),
             Text(_message!, style: Theme.of(context).textTheme.bodySmall),
           ],
+          if (widget.mediaService != null) ...[
+            const SizedBox(height: 16),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                OutlinedButton.icon(
+                  onPressed: _importInFlight
+                      ? null
+                      : () => unawaited(
+                          _importFromWorkProfile(moveSource: false),
+                        ),
+                  icon: const Icon(Icons.file_download_outlined),
+                  label: const Text('Copy from Work Profile'),
+                ),
+                OutlinedButton.icon(
+                  onPressed: _importInFlight
+                      ? null
+                      : () =>
+                            unawaited(_importFromWorkProfile(moveSource: true)),
+                  icon: const Icon(Icons.drive_file_move_outline),
+                  label: const Text('Move from Work Profile'),
+                ),
+              ],
+            ),
+          ],
           const SizedBox(height: 16),
           if (visibleApps.isEmpty)
             Card(
@@ -348,6 +570,11 @@ class _WorkProfileHomeState extends State<WorkProfileHome> {
                 scope: _scope,
                 client: widget.client,
                 onRun: _run,
+                onOpenStore: _openStore,
+                storeFallback:
+                    _storeFallbackPackages.contains(app.packageName) ||
+                    app.cloneEligibility ==
+                        CloneEligibility.storeFallbackRequired,
                 onShareVault: widget.vaultShuttle == null
                     ? null
                     : _shareVaultFile,
@@ -373,6 +600,8 @@ class _AppTile extends StatelessWidget {
     required this.scope,
     required this.client,
     required this.onRun,
+    required this.onOpenStore,
+    required this.storeFallback,
     this.onShareVault,
   });
 
@@ -384,6 +613,8 @@ class _AppTile extends StatelessWidget {
     Future<WorkProfileOperationResult> Function(),
   )
   onRun;
+  final Future<void> Function(ManagedAppState app) onOpenStore;
+  final bool storeFallback;
   final Future<void> Function(ManagedAppState app)? onShareVault;
 
   @override
@@ -394,7 +625,20 @@ class _AppTile extends StatelessWidget {
         onTap: isolated
             ? () => unawaited(onRun(app, () => client.launch(app.packageName)))
             : null,
-        leading: Icon(isolated ? Icons.work_outline : Icons.apps_outlined),
+        leading: app.iconBytes == null
+            ? Icon(isolated ? Icons.work_outline : Icons.apps_outlined)
+            : ClipRRect(
+                borderRadius: BorderRadius.circular(8),
+                child: Image.memory(
+                  app.iconBytes!,
+                  width: 40,
+                  height: 40,
+                  fit: BoxFit.cover,
+                  gaplessPlayback: true,
+                  errorBuilder: (_, _, _) =>
+                      Icon(isolated ? Icons.work_outline : Icons.apps_outlined),
+                ),
+              ),
         title: Text(app.label),
         subtitle: Text(
           isolated
@@ -459,6 +703,11 @@ class _AppTile extends StatelessWidget {
                     child: Text('Uninstall'),
                   ),
                 ],
+              )
+            : storeFallback
+            ? FilledButton(
+                onPressed: () => unawaited(onOpenStore(app)),
+                child: const Text('Store'),
               )
             : app.canClone
             ? FilledButton(

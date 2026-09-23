@@ -1,3 +1,5 @@
+import 'dart:typed_data';
+
 enum WorkProfileState {
   unsupported,
   absent,
@@ -60,6 +62,7 @@ class ManagedAppState {
     required this.hidden,
     required this.cloneEligibility,
     required this.installerActionRequired,
+    this.iconBytes,
   });
 
   final String packageName;
@@ -72,6 +75,7 @@ class ManagedAppState {
   final bool hidden;
   final CloneEligibility cloneEligibility;
   final bool installerActionRequired;
+  final Uint8List? iconBytes;
 
   bool get canLaunch => presentWork && launchableWork && !suspended && !hidden;
 
@@ -94,4 +98,31 @@ class WorkProfileOperationResult {
   final bool ok;
   final WorkProfileErrorCode? errorCode;
   final String? message;
+}
+
+class WorkProfileOperationException implements Exception {
+  const WorkProfileOperationException(this.errorCode, {this.message});
+
+  final WorkProfileErrorCode errorCode;
+  final String? message;
+
+  @override
+  String toString() =>
+      message ?? 'Work Profile operation failed (${errorCode.name}).';
+}
+
+class PickedWorkDocument {
+  const PickedWorkDocument({
+    required this.uri,
+    required this.displayName,
+    required this.mimeType,
+    required this.canDelete,
+    this.sizeBytes,
+  });
+
+  final Uri uri;
+  final String displayName;
+  final String mimeType;
+  final bool canDelete;
+  final int? sizeBytes;
 }

@@ -87,7 +87,11 @@ void main() {
       expect(adapter, contains('isQuietModeEnabled'));
       expect(adapter, contains('profileQuiet ='));
       expect(policy, contains('NativeWorkProfileState.QUIET'));
-      expect(adapter, isNot(contains('requestQuietModeEnabled')));
+      expect(adapter, contains('shouldRequestQuietModeDirectly'));
+      expect(adapter, contains('requestQuietModeEnabled(false, otherProfile)'));
+      expect(adapter, contains('MANAGED_PROFILE_SETTINGS_ACTION'));
+      expect(adapter, contains('Settings.ACTION_SETTINGS'));
+      expect(adapter, contains('USER_ACTION_REQUIRED'));
       expect(bridge, contains('setApplicationHidden'));
       expect(bridge, contains('MATCH_UNINSTALLED_PACKAGES'));
       expect(bridge, contains('MATCH_DISABLED_COMPONENTS'));
@@ -123,6 +127,71 @@ void main() {
     expect(bridge, contains('Intent.EXTRA_STREAM'));
     expect(bridge, contains('setPackage(targetPackage)'));
   });
+
+  test('work-profile inbound picker preserves provider identity and streams to Vault', () async {
+    final manifest = await File('android/app/src/main/AndroidManifest.xml')
+        .readAsString();
+    final pigeon = await File('pigeons/work_profile_api.dart').readAsString();
+    final adapter = await File(
+      'android/app/src/main/kotlin/io/hiroshimeow/private_vault_mobile/WorkProfileHostApiAdapter.kt',
+    ).readAsString();
+    final bridge = await File(
+      'android/app/src/main/kotlin/io/hiroshimeow/private_vault_mobile/WorkProfileBridgeActivity.kt',
+    ).readAsString();
+    final mainActivity = await File(
+      'android/app/src/main/kotlin/io/hiroshimeow/private_vault_mobile/MainActivity.kt',
+    ).readAsString();
+    final home = await File('lib/features/apps/work_profile_home.dart')
+        .readAsString();
+
+    expect(manifest, contains('action.PICK_WORK_DOCUMENT'));
+    expect(manifest, contains('action.OPEN_STORE'));
+    expect(manifest, contains('action.SHARE_VAULT_FILE'));
+    expect(pigeon, contains('class NativePickedWorkDocument'));
+    expect(pigeon, contains('NativePickedWorkDocument? pickWorkDocument()'));
+    expect(bridge, contains('Intent.ACTION_OPEN_DOCUMENT'));
+    expect(bridge, contains('OpenableColumns.DISPLAY_NAME'));
+    expect(bridge, contains('contentResolver.getType(uri)'));
+    expect(bridge, contains('EXTRA_CAN_DELETE'));
+    expect(adapter, contains('launchDocumentResult'));
+    expect(mainActivity, contains('openDocumentStream'));
+    expect(mainActivity, contains('readDocumentStream'));
+    expect(mainActivity, contains('contentResolver.openInputStream(uri)'));
+    expect(home, contains('PickedVaultSource('));
+    expect(home, contains('mediaService.importSources'));
+    expect(home, contains('moveSource: moveSource'));
+    expect(home, isNot(contains('writeAsBytes')));
+  });
+
+  test(
+    'readiness store fallback and icon transport stay bounded and app-scoped',
+    () async {
+      final adapter = await File(
+        'android/app/src/main/kotlin/io/hiroshimeow/private_vault_mobile/WorkProfileHostApiAdapter.kt',
+      ).readAsString();
+      final bridge = await File(
+        'android/app/src/main/kotlin/io/hiroshimeow/private_vault_mobile/WorkProfileBridgeActivity.kt',
+      ).readAsString();
+      final client = await File('lib/features/apps/work_profile_client.dart')
+          .readAsString();
+      final home = await File('lib/features/apps/work_profile_home.dart')
+          .readAsString();
+
+      expect(home, contains('Future<void>? _refreshFuture'));
+      expect(home, contains('if (current != null) return current'));
+      expect(home, contains('future.whenComplete'));
+      expect(bridge, contains('market://details?id='));
+      expect(bridge, contains('packageManager.resolveActivity'));
+      expect(bridge, contains('WorkProfileProtocol.ACTION_OPEN_STORE'));
+      expect(adapter, contains('MAX_APP_ICON_BYTES = 64 * 1024'));
+      expect(adapter, contains('MAX_APPS_JSON_BYTES = 256 * 1024'));
+      expect(adapter, contains('boundedAppIconPng'));
+      expect(bridge, contains('iconInclusionMask'));
+      expect(bridge, contains('toJson(includeIcon = false)'));
+      expect(client, contains('mapped.iconBytes ?? current.iconBytes'));
+      expect(home, contains('Image.memory'));
+    },
+  );
 
   test('package visibility remains narrow', () async {
     final manifest = await File('android/app/src/main/AndroidManifest.xml')

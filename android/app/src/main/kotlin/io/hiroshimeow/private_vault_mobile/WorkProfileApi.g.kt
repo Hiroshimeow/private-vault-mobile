@@ -299,7 +299,8 @@ data class NativeManagedAppState (
   val suspended: Boolean,
   val hidden: Boolean,
   val cloneEligibility: NativeCloneEligibility,
-  val installerActionRequired: Boolean
+  val installerActionRequired: Boolean,
+  val iconBytes: ByteArray? = null
 )
  {
   companion object {
@@ -314,7 +315,8 @@ data class NativeManagedAppState (
       val hidden = pigeonVar_list[7] as Boolean
       val cloneEligibility = pigeonVar_list[8] as NativeCloneEligibility
       val installerActionRequired = pigeonVar_list[9] as Boolean
-      return NativeManagedAppState(packageName, label, presentPersonal, presentWork, launchableWork, systemApp, suspended, hidden, cloneEligibility, installerActionRequired)
+      val iconBytes = pigeonVar_list[10] as ByteArray?
+      return NativeManagedAppState(packageName, label, presentPersonal, presentWork, launchableWork, systemApp, suspended, hidden, cloneEligibility, installerActionRequired, iconBytes)
     }
   }
   fun toList(): List<Any?> {
@@ -329,6 +331,7 @@ data class NativeManagedAppState (
       hidden,
       cloneEligibility,
       installerActionRequired,
+      iconBytes,
     )
   }
   override fun equals(other: Any?): Boolean {
@@ -339,7 +342,7 @@ data class NativeManagedAppState (
       return true
     }
     val other = other as NativeManagedAppState
-    return WorkProfileApiPigeonUtils.deepEquals(this.packageName, other.packageName) && WorkProfileApiPigeonUtils.deepEquals(this.label, other.label) && WorkProfileApiPigeonUtils.deepEquals(this.presentPersonal, other.presentPersonal) && WorkProfileApiPigeonUtils.deepEquals(this.presentWork, other.presentWork) && WorkProfileApiPigeonUtils.deepEquals(this.launchableWork, other.launchableWork) && WorkProfileApiPigeonUtils.deepEquals(this.systemApp, other.systemApp) && WorkProfileApiPigeonUtils.deepEquals(this.suspended, other.suspended) && WorkProfileApiPigeonUtils.deepEquals(this.hidden, other.hidden) && WorkProfileApiPigeonUtils.deepEquals(this.cloneEligibility, other.cloneEligibility) && WorkProfileApiPigeonUtils.deepEquals(this.installerActionRequired, other.installerActionRequired)
+    return WorkProfileApiPigeonUtils.deepEquals(this.packageName, other.packageName) && WorkProfileApiPigeonUtils.deepEquals(this.label, other.label) && WorkProfileApiPigeonUtils.deepEquals(this.presentPersonal, other.presentPersonal) && WorkProfileApiPigeonUtils.deepEquals(this.presentWork, other.presentWork) && WorkProfileApiPigeonUtils.deepEquals(this.launchableWork, other.launchableWork) && WorkProfileApiPigeonUtils.deepEquals(this.systemApp, other.systemApp) && WorkProfileApiPigeonUtils.deepEquals(this.suspended, other.suspended) && WorkProfileApiPigeonUtils.deepEquals(this.hidden, other.hidden) && WorkProfileApiPigeonUtils.deepEquals(this.cloneEligibility, other.cloneEligibility) && WorkProfileApiPigeonUtils.deepEquals(this.installerActionRequired, other.installerActionRequired) && WorkProfileApiPigeonUtils.deepEquals(this.iconBytes, other.iconBytes)
   }
 
   override fun hashCode(): Int {
@@ -354,10 +357,64 @@ data class NativeManagedAppState (
     result = 31 * result + WorkProfileApiPigeonUtils.deepHash(this.hidden)
     result = 31 * result + WorkProfileApiPigeonUtils.deepHash(this.cloneEligibility)
     result = 31 * result + WorkProfileApiPigeonUtils.deepHash(this.installerActionRequired)
+    result = 31 * result + WorkProfileApiPigeonUtils.deepHash(this.iconBytes)
     return result
   }
   override fun toString(): String {
-    return "NativeManagedAppState(packageName=$packageName, label=$label, presentPersonal=$presentPersonal, presentWork=$presentWork, launchableWork=$launchableWork, systemApp=$systemApp, suspended=$suspended, hidden=$hidden, cloneEligibility=$cloneEligibility, installerActionRequired=$installerActionRequired)"
+    return "NativeManagedAppState(packageName=$packageName, label=$label, presentPersonal=$presentPersonal, presentWork=$presentWork, launchableWork=$launchableWork, systemApp=$systemApp, suspended=$suspended, hidden=$hidden, cloneEligibility=$cloneEligibility, installerActionRequired=$installerActionRequired, iconBytes=${iconBytes?.contentToString()})"
+  }
+}
+
+/** Generated class from Pigeon that represents data sent in messages. */
+data class NativePickedWorkDocument (
+  val uri: String,
+  val displayName: String,
+  val mimeType: String,
+  val sizeBytes: Long? = null,
+  val canDelete: Boolean
+)
+ {
+  companion object {
+    fun fromList(pigeonVar_list: List<Any?>): NativePickedWorkDocument {
+      val uri = pigeonVar_list[0] as String
+      val displayName = pigeonVar_list[1] as String
+      val mimeType = pigeonVar_list[2] as String
+      val sizeBytes = pigeonVar_list[3] as Long?
+      val canDelete = pigeonVar_list[4] as Boolean
+      return NativePickedWorkDocument(uri, displayName, mimeType, sizeBytes, canDelete)
+    }
+  }
+  fun toList(): List<Any?> {
+    return listOf(
+      uri,
+      displayName,
+      mimeType,
+      sizeBytes,
+      canDelete,
+    )
+  }
+  override fun equals(other: Any?): Boolean {
+    if (other == null || other.javaClass != javaClass) {
+      return false
+    }
+    if (this === other) {
+      return true
+    }
+    val other = other as NativePickedWorkDocument
+    return WorkProfileApiPigeonUtils.deepEquals(this.uri, other.uri) && WorkProfileApiPigeonUtils.deepEquals(this.displayName, other.displayName) && WorkProfileApiPigeonUtils.deepEquals(this.mimeType, other.mimeType) && WorkProfileApiPigeonUtils.deepEquals(this.sizeBytes, other.sizeBytes) && WorkProfileApiPigeonUtils.deepEquals(this.canDelete, other.canDelete)
+  }
+
+  override fun hashCode(): Int {
+    var result = javaClass.hashCode()
+    result = 31 * result + WorkProfileApiPigeonUtils.deepHash(this.uri)
+    result = 31 * result + WorkProfileApiPigeonUtils.deepHash(this.displayName)
+    result = 31 * result + WorkProfileApiPigeonUtils.deepHash(this.mimeType)
+    result = 31 * result + WorkProfileApiPigeonUtils.deepHash(this.sizeBytes)
+    result = 31 * result + WorkProfileApiPigeonUtils.deepHash(this.canDelete)
+    return result
+  }
+  override fun toString(): String {
+    return "NativePickedWorkDocument(uri=$uri, displayName=$displayName, mimeType=$mimeType, sizeBytes=$sizeBytes, canDelete=$canDelete)"
   }
 }
 
@@ -435,6 +492,11 @@ private open class WorkProfileApiPigeonCodec : StandardMessageCodec() {
       }
       134.toByte() -> {
         return (readValue(buffer) as? List<Any?>)?.let {
+          NativePickedWorkDocument.fromList(it)
+        }
+      }
+      135.toByte() -> {
+        return (readValue(buffer) as? List<Any?>)?.let {
           NativeOperationResult.fromList(it)
         }
       }
@@ -463,8 +525,12 @@ private open class WorkProfileApiPigeonCodec : StandardMessageCodec() {
         stream.write(133)
         writeValue(stream, value.toList())
       }
-      is NativeOperationResult -> {
+      is NativePickedWorkDocument -> {
         stream.write(134)
+        writeValue(stream, value.toList())
+      }
+      is NativeOperationResult -> {
+        stream.write(135)
         writeValue(stream, value.toList())
       }
       else -> super.writeValue(stream, value)
@@ -478,11 +544,14 @@ interface WorkProfileHostApi {
   fun getCapability(): NativeWorkProfileCapability
   fun getProfileState(): NativeWorkProfileState
   fun startProvisioning(callback: (Result<NativeOperationResult>) -> Unit)
+  fun requestQuietModeDisabled(callback: (Result<NativeOperationResult>) -> Unit)
   fun listPersonalApps(): List<NativeManagedAppState>
   fun listWorkApps(callback: (Result<List<NativeManagedAppState>>) -> Unit)
   fun getAppState(packageName: String, callback: (Result<NativeManagedAppState?>) -> Unit)
   fun cloneToWorkProfile(packageName: String, callback: (Result<NativeOperationResult>) -> Unit)
   fun launchWorkApp(packageName: String, callback: (Result<NativeOperationResult>) -> Unit)
+  fun pickWorkDocument(callback: (Result<NativePickedWorkDocument?>) -> Unit)
+  fun openWorkStore(packageName: String, callback: (Result<NativeOperationResult>) -> Unit)
   fun shareVaultFileToWorkApp(packageName: String, stagedFileName: String, mimeType: String, displayName: String, callback: (Result<NativeOperationResult>) -> Unit)
   fun setSuspended(packageName: String, suspended: Boolean, callback: (Result<NativeOperationResult>) -> Unit)
   fun setHidden(packageName: String, hidden: Boolean, callback: (Result<NativeOperationResult>) -> Unit)
@@ -533,6 +602,24 @@ interface WorkProfileHostApi {
         if (api != null) {
           channel.setMessageHandler { _, reply ->
             api.startProvisioning{ result: Result<NativeOperationResult> ->
+              val error = result.exceptionOrNull()
+              if (error != null) {
+                reply.reply(WorkProfileApiPigeonUtils.wrapError(error))
+              } else {
+                val data = result.getOrNull()
+                reply.reply(WorkProfileApiPigeonUtils.wrapResult(data))
+              }
+            }
+          }
+        } else {
+          channel.setMessageHandler(null)
+        }
+      }
+      run {
+        val channel = BasicMessageChannel<Any?>(binaryMessenger, "dev.flutter.pigeon.private_vault_mobile.WorkProfileHostApi.requestQuietModeDisabled$separatedMessageChannelSuffix", codec)
+        if (api != null) {
+          channel.setMessageHandler { _, reply ->
+            api.requestQuietModeDisabled{ result: Result<NativeOperationResult> ->
               val error = result.exceptionOrNull()
               if (error != null) {
                 reply.reply(WorkProfileApiPigeonUtils.wrapError(error))
@@ -626,6 +713,44 @@ interface WorkProfileHostApi {
             val args = message as List<Any?>
             val packageNameArg = args[0] as String
             api.launchWorkApp(packageNameArg) { result: Result<NativeOperationResult> ->
+              val error = result.exceptionOrNull()
+              if (error != null) {
+                reply.reply(WorkProfileApiPigeonUtils.wrapError(error))
+              } else {
+                val data = result.getOrNull()
+                reply.reply(WorkProfileApiPigeonUtils.wrapResult(data))
+              }
+            }
+          }
+        } else {
+          channel.setMessageHandler(null)
+        }
+      }
+      run {
+        val channel = BasicMessageChannel<Any?>(binaryMessenger, "dev.flutter.pigeon.private_vault_mobile.WorkProfileHostApi.pickWorkDocument$separatedMessageChannelSuffix", codec)
+        if (api != null) {
+          channel.setMessageHandler { _, reply ->
+            api.pickWorkDocument{ result: Result<NativePickedWorkDocument?> ->
+              val error = result.exceptionOrNull()
+              if (error != null) {
+                reply.reply(WorkProfileApiPigeonUtils.wrapError(error))
+              } else {
+                val data = result.getOrNull()
+                reply.reply(WorkProfileApiPigeonUtils.wrapResult(data))
+              }
+            }
+          }
+        } else {
+          channel.setMessageHandler(null)
+        }
+      }
+      run {
+        val channel = BasicMessageChannel<Any?>(binaryMessenger, "dev.flutter.pigeon.private_vault_mobile.WorkProfileHostApi.openWorkStore$separatedMessageChannelSuffix", codec)
+        if (api != null) {
+          channel.setMessageHandler { message, reply ->
+            val args = message as List<Any?>
+            val packageNameArg = args[0] as String
+            api.openWorkStore(packageNameArg) { result: Result<NativeOperationResult> ->
               val error = result.exceptionOrNull()
               if (error != null) {
                 reply.reply(WorkProfileApiPigeonUtils.wrapError(error))
