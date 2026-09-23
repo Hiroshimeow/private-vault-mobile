@@ -22,8 +22,10 @@ FlutterTestSummary summarizeFlutterMachineLines(Iterable<String> lines) {
   var skipped = 0;
 
   for (final raw in lines) {
-    if (raw.trim().isEmpty) continue;
-    final event = jsonDecode(raw);
+    final line = raw.trim();
+    if (line.isEmpty) continue;
+    if (!line.startsWith('{') && !line.startsWith('[')) continue;
+    final event = jsonDecode(line);
     if (event is! Map<String, dynamic>) continue;
     if (event['type'] != 'testDone' || event['hidden'] == true) continue;
 

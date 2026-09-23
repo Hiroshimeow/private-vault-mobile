@@ -5,6 +5,8 @@ import '../../tool/summarize_flutter_test.dart';
 void main() {
   test('summarizes testDone events and ignores protocol array events', () {
     final summary = summarizeFlutterMachineLines([
+      'Resolving dependencies...',
+      'Running build hooks...',
       '{"type":"start"}',
       '[{"event":"test.startedProcess","params":{"vmServiceUri":"http://x"}}]',
       '{"type":"testDone","hidden":true,"result":"success","skipped":false}',
