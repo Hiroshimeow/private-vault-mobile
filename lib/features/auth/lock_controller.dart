@@ -7,10 +7,12 @@ class LockController extends ChangeNotifier {
 
   final bool backgroundLock;
   bool _isLocked = true;
+  int _unlockGeneration = 0;
   Timer? _backgroundTimer;
   VoidCallback? _confidentialityBoundary;
 
   bool get isLocked => _isLocked;
+  int get unlockGeneration => _unlockGeneration;
 
   void attachConfidentialityBoundary(VoidCallback callback) {
     if (_confidentialityBoundary != null &&
@@ -36,6 +38,7 @@ class LockController extends ChangeNotifier {
   void lock() {
     _backgroundTimer?.cancel();
     _backgroundTimer = null;
+    _unlockGeneration += 1;
     if (_isLocked) return;
     _confidentialityBoundary?.call();
     _isLocked = true;
@@ -45,7 +48,11 @@ class LockController extends ChangeNotifier {
   void panic() => lock();
 
   void onBackground({Duration delay = Duration.zero}) {
-    if (!backgroundLock || _isLocked) return;
+    if (!backgroundLock) return;
+    if (_isLocked) {
+      _unlockGeneration += 1;
+      return;
+    }
     _backgroundTimer?.cancel();
     if (delay <= Duration.zero) {
       lock();

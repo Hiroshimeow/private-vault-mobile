@@ -110,6 +110,7 @@ class _PrivateVaultAppState extends State<PrivateVaultApp>
             ? CoverKind.notes
             : CoverKind.calculator);
     WidgetsBinding.instance.addObserver(this);
+    widget.panicService?.start();
     unawaited(_refreshCalculatorPinLength());
   }
 
@@ -402,15 +403,25 @@ class _PrivateVaultAppState extends State<PrivateVaultApp>
     }
   }
 
+  bool _manualUnlockIsFresh(int generation) =>
+      mounted &&
+      widget.lockController.isLocked &&
+      widget.lockController.unlockGeneration == generation;
+
   Future<void> _requestUnlock(BuildContext materialContext) async {
+    final requestGeneration = widget.lockController.unlockGeneration;
     final configured = await widget.unlockService.isConfigured();
-    if (!mounted || !materialContext.mounted) return;
+    if (!materialContext.mounted || !_manualUnlockIsFresh(requestGeneration)) {
+      return;
+    }
 
     var biometricAvailable = false;
     final biometric = widget.biometricUnlock;
     if (_settings.biometricsEnabled && biometric != null) {
       biometricAvailable = await biometric.isAvailable();
-      if (!mounted || !materialContext.mounted) return;
+      if (!materialContext.mounted || !_manualUnlockIsFresh(requestGeneration)) {
+        return;
+      }
     }
 
     var pin = '';
@@ -425,11 +436,15 @@ class _PrivateVaultAppState extends State<PrivateVaultApp>
             Future<void> submit() async {
               if (_manualUnlockSubmitting) return;
               _manualUnlockSubmitting = true;
+              final attemptGeneration = widget.lockController.unlockGeneration;
               try {
                 final candidate = pin;
                 if (configured) {
                   final accepted = await widget.unlockService.verify(candidate);
-                  if (!sheetContext.mounted) return;
+                  if (!sheetContext.mounted ||
+                      !_manualUnlockIsFresh(attemptGeneration)) {
+                    return;
+                  }
                   if (!accepted) {
                     setSheetState(() => error = 'PIN not accepted');
                     return;
@@ -437,6 +452,10 @@ class _PrivateVaultAppState extends State<PrivateVaultApp>
                 } else {
                   try {
                     await widget.unlockService.configure(candidate);
+                    if (!sheetContext.mounted ||
+                        !_manualUnlockIsFresh(attemptGeneration)) {
+                      return;
+                    }
                     _pinLengthFuture = null;
                   } on Object {
                     if (!sheetContext.mounted) return;
@@ -454,7 +473,10 @@ class _PrivateVaultAppState extends State<PrivateVaultApp>
                     return;
                   }
                   final biometricAccepted = await biometric.authenticate();
-                  if (!sheetContext.mounted) return;
+                  if (!sheetContext.mounted ||
+                      !_manualUnlockIsFresh(attemptGeneration)) {
+                    return;
+                  }
                   if (!biometricAccepted) {
                     setSheetState(
                       () => error = 'Biometric unlock not accepted',
@@ -463,14 +485,18 @@ class _PrivateVaultAppState extends State<PrivateVaultApp>
                   }
                 }
 
-                if (!sheetContext.mounted) return;
+                if (!sheetContext.mounted ||
+                    !_manualUnlockIsFresh(attemptGeneration)) {
+                  return;
+                }
                 final sessionGeneration = await _openVaultSession(candidate);
                 if (sessionGeneration == null) {
                   if (!sheetContext.mounted) return;
                   setSheetState(() => error = 'Protected storage unavailable');
                   return;
                 }
-                if (!sheetContext.mounted || !widget.lockController.isLocked) {
+                if (!sheetContext.mounted ||
+                    !_manualUnlockIsFresh(attemptGeneration)) {
                   _clearVaultSessionIfOwned(sessionGeneration);
                   return;
                 }

@@ -1028,4 +1028,30 @@ void main() {
     );
   });
 
+  testWidgets('background invalidates a pending manual unlock result', (tester) async {
+    final lock = LockController();
+    final unlock = DeferredManualUnlockService();
+    await tester.pumpWidget(
+      PrivateVaultApp(
+        lockController: lock,
+        unlockService: unlock,
+        initialCover: CoverKind.notes,
+      ),
+    );
+
+    await tester.longPress(find.byKey(const Key('cover-title')));
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byKey(const Key('unlock-pin')), '0000');
+    await tester.tap(find.text('Unlock'));
+    await tester.pump();
+    expect(unlock.verifyCalls, 1);
+
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.paused);
+    await tester.pump();
+    unlock.verification.complete(true);
+    await tester.pumpAndSettle();
+
+    expect(lock.isLocked, isTrue);
+  });
+
 }
