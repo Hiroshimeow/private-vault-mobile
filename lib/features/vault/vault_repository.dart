@@ -122,6 +122,16 @@ abstract interface class GenerationAwarePinSessionVaultRepository
   void clearSessionIfGeneration(int generation);
 }
 
+abstract interface class PreparedPinSession {
+  void destroy();
+}
+
+abstract interface class PreparablePinSessionVaultRepository
+    implements GenerationAwarePinSessionVaultRepository {
+  Future<PreparedPinSession> prepareSession(String pin);
+  int activatePreparedSession(PreparedPinSession prepared);
+}
+
 enum PinSessionSwitchOutcome { active, committedSessionClosed }
 
 abstract interface class TransactionalPinSessionVaultRepository

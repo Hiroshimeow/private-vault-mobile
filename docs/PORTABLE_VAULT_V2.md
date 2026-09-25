@@ -82,15 +82,20 @@ Object ID and namespace identity are therefore inside the authenticated plaintex
 ```text
 <selected portable root>/
   <namespace_id>/
+    catalog.pvc
     objects/
       <object_id>.pvb
-      <object_id>.pvm
-      <object_id>.pvt
+      # legacy readers may also encounter <object_id>.pvm/.pvt
+    cache/
+      thumbnails/
+        <object_id>.pvt
 ```
 
-`<object_id>.pvb` is the authoritative encrypted payload object. `<object_id>.pvm` is an encrypted listing-metadata sidecar using the same V2 envelope/profile, with authenticated `name = <object_id>.meta`, the same media type/creation time/namespace, and an empty payload. Gallery/list operations read the small `.pvm` sidecar instead of decrypting the full payload. If a sidecar is missing or invalid, implementations may rebuild it from the authenticated `.pvb` payload; the payload remains authoritative.
+`<object_id>.pvb` is the sole authoritative encrypted payload object for new writes. Its authenticated V2 metadata already contains media type, creation time, namespace, and logical name, so new objects do not require a per-object `.pvm` listing sidecar. Legacy encrypted `.pvm` sidecars under `objects/` remain readable as a compatibility cache, but they are never authoritative and are not recreated for new objects.
 
-`<object_id>.pvt` is an optional, reconstructible encrypted media-thumbnail cache for image and video tiles. It uses the same V2 envelope/profile with authenticated `name = <object_id>.thumb`, `type = image/jpeg`, the same namespace and creation time, and a bounded JPEG thumbnail payload. Gallery scrolling may decrypt `.pvt`, but must not decrypt the authoritative `.pvb` merely to populate a tile. Missing, corrupt, or unsupported `.pvt` data is treated as a cache miss and may be deleted/rebuilt without changing the authoritative payload.
+`catalog.pvc` is one encrypted, reconstructible namespace catalog containing only object ID, media type, and creation time. It exists to avoid decrypting large payloads during listing. The repository reconciles it against actual `.pvb` filenames and rebuilds missing/stale entries from authenticated payloads or legacy `.pvm` cache data; catalog failure must never delete or hide an existing payload.
+
+`cache/thumbnails/<object_id>.pvt` is an optional, reconstructible encrypted media-thumbnail cache for image and video tiles. It uses the same V2 envelope/profile with authenticated `name = <object_id>.thumb`, `type = image/jpeg`, the same namespace and creation time, and a bounded JPEG thumbnail payload. Legacy `objects/<object_id>.pvt` thumbnails remain readable. Missing, corrupt, unsupported, or orphan thumbnail cache data may be deleted/rebuilt without changing the authoritative `.pvb` payload.
 
 Multiple PIN identities coexist under one selected portable root. Switching PIN selects another namespace; it does not re-key or delete prior namespaces.
 

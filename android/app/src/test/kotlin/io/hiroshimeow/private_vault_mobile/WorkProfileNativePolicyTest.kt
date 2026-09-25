@@ -53,7 +53,7 @@ class WorkProfileNativePolicyTest {
     }
 
     @Test
-    fun `short bridge operations fail quickly while installer confirmation stays long`() {
+    fun `short bridge operations fail quickly while user confirmation stays long`() {
         assertEquals(
             5_000L,
             WorkProfileNativePolicy.bridgeTimeoutMs(
@@ -65,6 +65,12 @@ class WorkProfileNativePolicyTest {
             WorkProfileNativePolicy.bridgeTimeoutMs(WorkProfileProtocol.ACTION_CLONE),
         )
         assertEquals(
+            5 * 60 * 1_000L,
+            WorkProfileNativePolicy.bridgeTimeoutMs(
+                WorkProfileProtocol.ACTION_PICK_WORK_DOCUMENT,
+            ),
+        )
+        assertEquals(
             NativeWorkProfileErrorCode.BRIDGE_TIMEOUT,
             WorkProfileNativePolicy.bridgeTimeoutError(
                 WorkProfileProtocol.ACTION_LAUNCH,
@@ -74,6 +80,12 @@ class WorkProfileNativePolicyTest {
             NativeWorkProfileErrorCode.USER_ACTION_REQUIRED,
             WorkProfileNativePolicy.bridgeTimeoutError(
                 WorkProfileProtocol.ACTION_UNINSTALL,
+            ),
+        )
+        assertEquals(
+            NativeWorkProfileErrorCode.USER_ACTION_REQUIRED,
+            WorkProfileNativePolicy.bridgeTimeoutError(
+                WorkProfileProtocol.ACTION_PICK_WORK_DOCUMENT,
             ),
         )
     }
@@ -99,6 +111,34 @@ class WorkProfileNativePolicyTest {
                 profileQuiet = true,
             ),
         )
+    }
+
+    @Test
+    fun `quiet recovery calls direct API only when available and authorized`() {
+        assertEquals(false, WorkProfileNativePolicy.shouldRequestQuietModeDirectly(27, true))
+        assertEquals(false, WorkProfileNativePolicy.shouldRequestQuietModeDirectly(28, false))
+        assertEquals(true, WorkProfileNativePolicy.shouldRequestQuietModeDirectly(28, true))
+    }
+
+    @Test
+    fun `aggregate app payload budget drops excess icons`() {
+        val budgetBytes = 256 * 1024
+        val metadataBytes = 8 * 1024
+        val iconDeltas = List(12) { 87_384 }
+
+        val included = WorkProfileNativePolicy.iconInclusionMask(
+            metadataPayloadBytes = metadataBytes,
+            iconPayloadDeltas = iconDeltas,
+            maxPayloadBytes = budgetBytes,
+        )
+        val finalBytes = metadataBytes + iconDeltas.zip(included).sumOf { (delta, keep) ->
+            if (keep) delta else 0
+        }
+
+        assertEquals(iconDeltas.size, included.size)
+        assertEquals(true, included.any { it })
+        assertEquals(true, included.any { !it })
+        assertEquals(true, finalBytes <= budgetBytes)
     }
 
     @Test

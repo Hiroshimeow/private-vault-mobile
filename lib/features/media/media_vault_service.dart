@@ -143,6 +143,18 @@ class MediaVaultService {
             ];
     }
 
+    return importSources(
+      sources,
+      onProgress: onProgress,
+      moveSource: moveSource,
+    );
+  }
+
+  Future<VaultImportBatchResult> importSources(
+    List<PickedVaultSource> sources, {
+    VaultImportProgressCallback? onProgress,
+    bool moveSource = false,
+  }) async {
     final imported = <VaultItem>[];
     final failures = <VaultImportFailure>[];
     for (var index = 0; index < sources.length; index++) {

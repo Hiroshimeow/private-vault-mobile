@@ -30,6 +30,7 @@ internal object WorkProfileNativePolicy {
         when (action) {
             WorkProfileProtocol.ACTION_CLONE,
             WorkProfileProtocol.ACTION_UNINSTALL,
+            WorkProfileProtocol.ACTION_PICK_WORK_DOCUMENT,
             -> USER_CONFIRMATION_TIMEOUT_MS
             else -> FAST_BRIDGE_TIMEOUT_MS
         }
@@ -38,12 +39,32 @@ internal object WorkProfileNativePolicy {
         when (action) {
             WorkProfileProtocol.ACTION_CLONE,
             WorkProfileProtocol.ACTION_UNINSTALL,
+            WorkProfileProtocol.ACTION_PICK_WORK_DOCUMENT,
             -> NativeWorkProfileErrorCode.USER_ACTION_REQUIRED
             else -> NativeWorkProfileErrorCode.BRIDGE_TIMEOUT
         }
 
     fun shouldContinuePolling(elapsedMs: Long, timeoutMs: Long): Boolean =
         elapsedMs < timeoutMs
+
+    fun shouldRequestQuietModeDirectly(sdkInt: Int, authorizedCaller: Boolean): Boolean =
+        sdkInt >= 28 && authorizedCaller
+
+    fun iconInclusionMask(
+        metadataPayloadBytes: Int,
+        iconPayloadDeltas: List<Int>,
+        maxPayloadBytes: Int,
+    ): List<Boolean> {
+        var payloadBytes = metadataPayloadBytes
+        return iconPayloadDeltas.map { delta ->
+            if (delta > 0 && payloadBytes + delta <= maxPayloadBytes) {
+                payloadBytes += delta
+                true
+            } else {
+                false
+            }
+        }
+    }
 
     fun capabilityState(
         supported: Boolean,

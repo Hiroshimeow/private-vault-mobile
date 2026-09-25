@@ -1,5 +1,3 @@
-import 'dart:async';
-
 import 'package:flutter/widgets.dart';
 
 enum SystemHandoffLifecyclePhase { none, armed, suspended, backgroundTracked }
@@ -8,57 +6,70 @@ class SystemHandoffLifecycleCoordinator {
   SystemHandoffLifecycleCoordinator({
     required this.onBackground,
     required this.onForeground,
-    this.handoffGrace = const Duration(seconds: 3),
   });
 
   final void Function() onBackground;
   final void Function() onForeground;
-  final Duration handoffGrace;
 
-  Timer? _graceTimer;
+  int _leaseCount = 0;
   SystemHandoffLifecyclePhase _phase = SystemHandoffLifecyclePhase.none;
 
   SystemHandoffLifecyclePhase get phase => _phase;
-
-  bool get handoffActive =>
-      _phase == SystemHandoffLifecyclePhase.armed ||
-      _phase == SystemHandoffLifecyclePhase.suspended;
+  bool get handoffActive => _leaseCount > 0;
+  int get handoffLeaseCount => _leaseCount;
 
   void arm() {
-    _graceTimer?.cancel();
-    _phase = SystemHandoffLifecyclePhase.armed;
-    _graceTimer = Timer(handoffGrace, _expireHandoff);
+    _leaseCount += 1;
+    if (_phase == SystemHandoffLifecyclePhase.none) {
+      _phase = SystemHandoffLifecyclePhase.armed;
+    }
   }
 
   void disarm() {
-    if (_phase == SystemHandoffLifecyclePhase.armed) {
-      _clearHandoff();
+    if (_leaseCount == 0) return;
+    _leaseCount -= 1;
+    if (_leaseCount > 0) return;
+
+    if (_phase == SystemHandoffLifecyclePhase.suspended) {
+      _trackBackground();
+      return;
     }
-    // If a lifecycle transition was already observed, keep the bounded grace
-    // alive until either resumed or expiry. A plugin future can complete while
-    // the app is still backgrounded and must not disable the lock boundary.
+    if (_phase == SystemHandoffLifecyclePhase.armed) {
+      _phase = SystemHandoffLifecyclePhase.none;
+    }
   }
 
   void handle(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
       final wasBackgroundTracked =
           _phase == SystemHandoffLifecyclePhase.backgroundTracked;
-      _clearHandoff();
+      _phase = _leaseCount > 0
+          ? SystemHandoffLifecyclePhase.armed
+          : SystemHandoffLifecyclePhase.none;
       if (wasBackgroundTracked) {
         onForeground();
       }
       return;
     }
 
-    if (!_isBackgroundState(state)) return;
+    // Android frequently reports a short inactive transition for focus loss.
+    // Treating inactive alone as background makes dialogs and system UI lock
+    // the secret workspace even though the app never actually left foreground.
+    if (state == AppLifecycleState.inactive) return;
 
     if (state == AppLifecycleState.detached) {
+      // Detach is a confidentiality boundary even if a picker lease is active.
+      _leaseCount = 0;
       _trackBackground();
       return;
     }
 
-    if (_phase == SystemHandoffLifecyclePhase.armed ||
-        _phase == SystemHandoffLifecyclePhase.suspended) {
+    if (state != AppLifecycleState.paused &&
+        state != AppLifecycleState.hidden) {
+      return;
+    }
+
+    if (_leaseCount > 0) {
       _phase = SystemHandoffLifecyclePhase.suspended;
       return;
     }
@@ -66,39 +77,14 @@ class SystemHandoffLifecycleCoordinator {
     _trackBackground();
   }
 
-  void _expireHandoff() {
-    _graceTimer = null;
-    if (_phase == SystemHandoffLifecyclePhase.armed) {
-      _phase = SystemHandoffLifecyclePhase.none;
-      return;
-    }
-    if (_phase == SystemHandoffLifecyclePhase.suspended) {
-      _trackBackground();
-    }
-  }
-
   void _trackBackground() {
-    _graceTimer?.cancel();
-    _graceTimer = null;
     if (_phase == SystemHandoffLifecyclePhase.backgroundTracked) return;
     _phase = SystemHandoffLifecyclePhase.backgroundTracked;
     onBackground();
   }
 
-  void _clearHandoff() {
-    _graceTimer?.cancel();
-    _graceTimer = null;
-    _phase = SystemHandoffLifecyclePhase.none;
-  }
-
-  bool _isBackgroundState(AppLifecycleState state) {
-    return state == AppLifecycleState.inactive ||
-        state == AppLifecycleState.paused ||
-        state == AppLifecycleState.hidden ||
-        state == AppLifecycleState.detached;
-  }
-
   void dispose() {
-    _clearHandoff();
+    _leaseCount = 0;
+    _phase = SystemHandoffLifecyclePhase.none;
   }
 }

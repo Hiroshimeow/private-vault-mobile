@@ -34,11 +34,13 @@ void main() {
     }
     expect(bridge, contains('.partial-'));
     expect(bridge, contains('pending.stream.fd.sync()'));
-    expect(bridge, contains('pending.temporary.renameTo(pending.targetName)'));
+    expect(bridge, contains('DocumentsContract.renameDocument('));
+    expect(bridge, contains('pending.temporaryUri'));
+    expect(bridge, contains('pending.targetName'));
     expect(bridge, contains('ensureExactDisplayName'));
-    expect(bridge, contains('file.name == expectedName'));
-    expect(bridge, contains('current.createDirectory(segment)'));
-    expect(bridge, contains('?.let { ensureExactDisplayName(it, segment) }'));
+    expect(bridge, contains('current?.name == expectedName'));
+    expect(bridge, contains('createDirectory(current, segment)'));
+    expect(bridge, contains('DocumentsContract.createDocument('));
     expect(
       bridge,
       contains(

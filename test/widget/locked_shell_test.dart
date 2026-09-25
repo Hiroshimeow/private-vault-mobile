@@ -7,6 +7,7 @@ import 'package:private_vault_mobile/app/private_vault_app.dart';
 import 'package:private_vault_mobile/features/apps/vault_shuttle_service.dart';
 import 'package:private_vault_mobile/features/auth/biometric_unlock.dart';
 import 'package:private_vault_mobile/features/auth/lock_controller.dart';
+import 'package:private_vault_mobile/features/auth/unlock_gate/calculator_unlock_gate.dart';
 import 'package:private_vault_mobile/features/cover/calculator_cover.dart';
 import 'package:private_vault_mobile/features/media/media_vault_service.dart';
 import 'package:private_vault_mobile/features/settings/app_settings.dart';
@@ -932,10 +933,10 @@ void main() {
       await tester.tap(find.byKey(const Key('settings-save-pin')));
       await tester.pumpAndSettle();
 
-      expect(
-        find.text('PIN changed. Unlock again with the new PIN.'),
-        findsOneWidget,
-      );
+      expect(lock.isLocked, isTrue);
+      expect(find.text('Settings'), findsNothing);
+      expect(find.text('Switch Vault PIN'), findsNothing);
+      expect(find.byKey(const Key('cover-title')), findsOneWidget);
     },
   );
 
@@ -988,4 +989,43 @@ void main() {
     expect(find.text('Buy milk'), findsOneWidget);
     expect(find.text('Vault'), findsNothing);
   });
+
+  testWidgets('calculator preserves repeated zero display and triggers exact held PIN once', (tester) async {
+    final attempts = <CalculatorUnlockAttempt>[];
+    await tester.pumpWidget(
+      MaterialApp(
+        home: CalculatorCover(
+          pinLength: 5,
+          holdDuration: const Duration(milliseconds: 700),
+          onUnlockTriggered: attempts.add,
+        ),
+      ),
+    );
+
+    for (var index = 0; index < 5; index += 1) {
+      await tester.tap(find.byKey(const Key('calculator-key-0')));
+    }
+    await tester.pump();
+    expect(
+      tester.widget<Text>(find.byKey(const Key('calculator-display'))).data,
+      '00000',
+    );
+
+    final zero = find.byKey(const Key('calculator-key-0'));
+    final gesture = await tester.startGesture(tester.getCenter(zero));
+    await tester.pump(const Duration(milliseconds: 699));
+    expect(attempts, isEmpty);
+    await tester.pump(const Duration(milliseconds: 1));
+    expect(attempts, hasLength(1));
+    expect(attempts.single.candidate, '00000');
+    await gesture.up();
+    await tester.pump();
+
+    expect(attempts, hasLength(1));
+    expect(
+      tester.widget<Text>(find.byKey(const Key('calculator-display'))).data,
+      '00000',
+    );
+  });
+
 }

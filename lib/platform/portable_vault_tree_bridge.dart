@@ -2,7 +2,11 @@ import 'package:flutter/services.dart';
 import 'package:private_vault_mobile/features/vault/portable_storage/portable_vault_storage.dart';
 
 class PortableVaultTreeBridge
-    implements PortableVaultStreamingStorage, PortableVaultRootAccess {
+    implements
+        PortableVaultStreamingStorage,
+        PortableVaultMetadataStorage,
+        PortableVaultEntryMetadataStorage,
+        PortableVaultRootAccess {
   PortableVaultTreeBridge({
     this.channel = const MethodChannel('private_vault/portable_tree'),
   });
@@ -27,6 +31,48 @@ class PortableVaultTreeBridge
         'path': path,
       });
       return result ?? const [];
+    } on PlatformException catch (error) {
+      throw PortableVaultStorageException(error.code);
+    }
+  }
+
+  @override
+  Future<List<PortableVaultStorageEntryMetadata>> listMetadata(
+    String path,
+  ) async {
+    try {
+      final result = await channel.invokeListMethod<Object?>('listMetadata', {
+        'path': path,
+      });
+      if (result == null) return const [];
+      return result
+          .map((value) {
+            final map = Map<Object?, Object?>.from(value! as Map);
+            return PortableVaultStorageEntryMetadata(
+              name: map['name']! as String,
+              sizeBytes: (map['sizeBytes']! as num).toInt(),
+              modifiedAtMillis: (map['modifiedAtMillis']! as num).toInt(),
+            );
+          })
+          .toList(growable: false);
+    } on PlatformException catch (error) {
+      throw PortableVaultStorageException(error.code);
+    }
+  }
+
+  @override
+  Future<PortableVaultStorageEntryMetadata?> metadata(String path) async {
+    try {
+      final result = await channel.invokeMapMethod<Object?, Object?>(
+        'metadata',
+        {'path': path},
+      );
+      if (result == null) return null;
+      return PortableVaultStorageEntryMetadata(
+        name: result['name']! as String,
+        sizeBytes: (result['sizeBytes']! as num).toInt(),
+        modifiedAtMillis: (result['modifiedAtMillis']! as num).toInt(),
+      );
     } on PlatformException catch (error) {
       throw PortableVaultStorageException(error.code);
     }

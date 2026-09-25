@@ -6,15 +6,17 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:private_vault_mobile/app/private_vault_theme.dart';
+import 'package:private_vault_mobile/features/apps/clone_profile_client.dart';
+import 'package:private_vault_mobile/features/apps/clone_profile_home.dart';
 import 'package:private_vault_mobile/features/apps/vault_shuttle_service.dart';
 import 'package:private_vault_mobile/features/apps/work_profile_client.dart';
-import 'package:private_vault_mobile/features/apps/work_profile_home.dart';
 import 'package:private_vault_mobile/features/auth/biometric_unlock.dart';
 import 'package:private_vault_mobile/features/auth/lock_controller.dart';
 import 'package:private_vault_mobile/features/auth/secure_unlock_service.dart';
 import 'package:private_vault_mobile/features/auth/system_handoff_lifecycle.dart';
 import 'package:private_vault_mobile/features/auth/unlock_gate/calculator_unlock_gate.dart';
 import 'package:private_vault_mobile/features/auth/unlock_attempt_controller.dart';
+import 'package:private_vault_mobile/features/auth/unlock_performance_trace.dart';
 import 'package:private_vault_mobile/features/browser/browser_home.dart';
 import 'package:private_vault_mobile/features/cover/calculator_cover.dart';
 import 'package:private_vault_mobile/features/cover/notes_cover.dart';
@@ -44,6 +46,7 @@ class PrivateVaultApp extends StatefulWidget {
     this.panicService,
     this.disguiseBridge,
     this.workProfileClient,
+    this.cloneProfileClient,
     this.vaultShuttle,
     this.portableRootAccess,
     this.legacyVaultMigration,
@@ -60,6 +63,7 @@ class PrivateVaultApp extends StatefulWidget {
   final PanicSensorService? panicService;
   final PlatformDisguiseBridge? disguiseBridge;
   final WorkProfileClient? workProfileClient;
+  final CloneProfileClient? cloneProfileClient;
   final VaultShuttle? vaultShuttle;
   final PortableVaultRootAccess? portableRootAccess;
   final LegacyVaultMigrationService? legacyVaultMigration;
@@ -256,7 +260,12 @@ class _PrivateVaultAppState extends State<PrivateVaultApp>
   Future<void> _attemptCalculatorUnlock(CalculatorUnlockAttempt attempt) async {
     if (!widget.lockController.isLocked) return;
 
-    final state = _unlockAttemptController.begin();
+    final state = _unlockAttemptController.tryBegin();
+    if (state == null) return;
+    UnlockPerformanceTrace.mark('attempt_started', attemptId: state.id);
+    Future<PreparedPinSession>? preparedFuture;
+    PreparedPinSession? prepared;
+    var preparedActivated = false;
     try {
       final configuredLength = await _configuredPinLength();
       if (!mounted ||
@@ -269,7 +278,30 @@ class _PrivateVaultAppState extends State<PrivateVaultApp>
         return;
       }
 
+      final repository = widget.vaultRepository;
+      if (repository is PreparablePinSessionVaultRepository) {
+        // Argon2 preparation is independent from verifier PBKDF2. Both KDFs
+        // run off the UI isolate, while activation stays behind verification.
+        UnlockPerformanceTrace.mark(
+          'session_prepare_start',
+          attemptId: state.id,
+        );
+        preparedFuture = repository
+            .prepareSession(attempt.candidate)
+            .whenComplete(
+              () => UnlockPerformanceTrace.mark(
+                'session_prepare_end',
+                attemptId: state.id,
+              ),
+            );
+      }
+      UnlockPerformanceTrace.mark('verification_start', attemptId: state.id);
       final pinAccepted = await widget.unlockService.verify(attempt.candidate);
+      UnlockPerformanceTrace.mark(
+        'verification_end',
+        attemptId: state.id,
+        fields: {'accepted': pinAccepted},
+      );
       if (!mounted ||
           !widget.lockController.isLocked ||
           !_unlockAttemptController.isCurrent(state) ||
@@ -302,16 +334,61 @@ class _PrivateVaultAppState extends State<PrivateVaultApp>
 
       if (_unlockAttemptController.isCurrent(state) &&
           widget.lockController.isLocked) {
-        final sessionGeneration = await _openVaultSession(attempt.candidate);
-        if (sessionGeneration == null) return;
+        late final int sessionGeneration;
+        final pendingPrepared = preparedFuture;
+        if (repository is PreparablePinSessionVaultRepository &&
+            pendingPrepared != null) {
+          try {
+            prepared = await pendingPrepared;
+          } on Object {
+            return;
+          }
+          if (!mounted ||
+              !_unlockAttemptController.isCurrent(state) ||
+              !widget.lockController.isLocked) {
+            return;
+          }
+          try {
+            sessionGeneration = repository.activatePreparedSession(prepared);
+            preparedActivated = true;
+          } on Object {
+            return;
+          }
+        } else {
+          final openedGeneration = await _openVaultSession(attempt.candidate);
+          if (openedGeneration == null) return;
+          sessionGeneration = openedGeneration;
+        }
         if (!_unlockAttemptController.isCurrent(state) ||
             !widget.lockController.isLocked) {
           _clearVaultSessionIfOwned(sessionGeneration);
           return;
         }
+        UnlockPerformanceTrace.mark('unlock_committed', attemptId: state.id);
         widget.lockController.unlock();
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          UnlockPerformanceTrace.mark(
+            'first_unlocked_frame',
+            attemptId: state.id,
+          );
+        });
       }
     } finally {
+      if (!preparedActivated) {
+        final localPrepared = prepared;
+        if (localPrepared != null) {
+          localPrepared.destroy();
+        } else {
+          final pending = preparedFuture;
+          if (pending != null) {
+            try {
+              (await pending).destroy();
+            } on Object {
+              // Preparation failed or was invalidated by a newer lock/session.
+            }
+          }
+        }
+      }
       _unlockAttemptController.complete(state);
     }
   }
@@ -497,6 +574,7 @@ class _PrivateVaultAppState extends State<PrivateVaultApp>
           settings: const RouteSettings(name: '/secret'),
           builder: (_) => SecretWorkspace(
             onLock: widget.lockController.lock,
+            isSecretUnlocked: () => !widget.lockController.isLocked,
             unlockService: widget.unlockService,
             onPinChanged: _switchVaultPin,
             vaultRepository: widget.vaultRepository,
@@ -511,6 +589,7 @@ class _PrivateVaultAppState extends State<PrivateVaultApp>
             settings: _settings,
             disguiseBridge: widget.disguiseBridge,
             workProfileClient: widget.workProfileClient,
+            cloneProfileClient: widget.cloneProfileClient,
             vaultShuttle: widget.vaultShuttle,
             portableRootAccess: widget.portableRootAccess,
             legacyVaultMigration: widget.legacyVaultMigration,
@@ -566,6 +645,7 @@ class SecretWorkspace extends StatefulWidget {
   const SecretWorkspace({
     super.key,
     required this.onLock,
+    required this.isSecretUnlocked,
     required this.unlockService,
     required this.onPinChanged,
     required this.onSystemHandoffChanged,
@@ -575,12 +655,14 @@ class SecretWorkspace extends StatefulWidget {
     this.portableRootAccess,
     this.legacyVaultMigration,
     this.workProfileClient,
+    this.cloneProfileClient,
     this.vaultShuttle,
     this.vaultRepository,
     this.mediaService,
   });
 
   final VoidCallback onLock;
+  final ValueGetter<bool> isSecretUnlocked;
   final UnlockService unlockService;
   final Future<PinChangeResult> Function(String pin) onPinChanged;
   final ValueChanged<bool> onSystemHandoffChanged;
@@ -590,6 +672,7 @@ class SecretWorkspace extends StatefulWidget {
   final PortableVaultRootAccess? portableRootAccess;
   final LegacyVaultMigrationService? legacyVaultMigration;
   final WorkProfileClient? workProfileClient;
+  final CloneProfileClient? cloneProfileClient;
   final VaultShuttle? vaultShuttle;
   final VaultRepository? vaultRepository;
   final MediaVaultService? mediaService;
@@ -613,7 +696,7 @@ class _SecretWorkspaceState extends State<SecretWorkspace> {
 
   Widget _page(int index) {
     if (!_visited.contains(index)) return const SizedBox.shrink();
-    final hasApps = widget.workProfileClient != null;
+    final hasApps = widget.cloneProfileClient != null;
     if (index == 0) {
       return widget.vaultRepository != null && widget.mediaService != null
           ? VaultHome(
@@ -626,10 +709,9 @@ class _SecretWorkspaceState extends State<SecretWorkspace> {
           : const _VaultUnavailable();
     }
     if (hasApps && index == 1) {
-      return WorkProfileHome(
-        key: const ValueKey('work-profile-home'),
-        client: widget.workProfileClient!,
-        vaultShuttle: widget.vaultShuttle,
+      return CloneProfileHome(
+        key: const ValueKey('clone-profile-home'),
+        client: widget.cloneProfileClient!,
       );
     }
     final browserIndex = hasApps ? 2 : 1;
@@ -644,6 +726,7 @@ class _SecretWorkspaceState extends State<SecretWorkspace> {
       key: const ValueKey('settings-home'),
       settings: widget.settings,
       unlockService: widget.unlockService,
+      onLock: widget.onLock,
       onPinChanged: (pin) async {
         final result = await widget.onPinChanged(pin);
         if (result == PinChangeResult.active && mounted) {
@@ -668,7 +751,7 @@ class _SecretWorkspaceState extends State<SecretWorkspace> {
 
   @override
   Widget build(BuildContext context) {
-    final hasApps = widget.workProfileClient != null;
+    final hasApps = widget.cloneProfileClient != null;
     final labels = hasApps
         ? const ['Vault', 'Apps', 'Browser', 'Settings']
         : const ['Vault', 'Browser', 'Settings'];
@@ -742,6 +825,7 @@ class _SettingsHome extends StatefulWidget {
     super.key,
     required this.settings,
     required this.unlockService,
+    required this.onLock,
     required this.onPinChanged,
     required this.onChanged,
     this.disguiseBridge,
@@ -753,6 +837,7 @@ class _SettingsHome extends StatefulWidget {
 
   final AppSettings settings;
   final UnlockService unlockService;
+  final VoidCallback onLock;
   final Future<PinChangeResult> Function(String pin) onPinChanged;
   final ValueChanged<AppSettings> onChanged;
   final PlatformDisguiseBridge? disguiseBridge;
@@ -1017,15 +1102,7 @@ class _SettingsHomeState extends State<_SettingsHome> {
                   Navigator.of(dialogContext).pop();
                   if (result == PinChangeResult.committedSessionClosed &&
                       mounted) {
-                    ScaffoldMessenger.of(this.context)
-                      ..clearSnackBars()
-                      ..showSnackBar(
-                        const SnackBar(
-                          content: Text(
-                            'PIN changed. Unlock again with the new PIN.',
-                          ),
-                        ),
-                      );
+                    widget.onLock();
                   }
                 } finally {
                   switching = false;

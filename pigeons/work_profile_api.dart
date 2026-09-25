@@ -57,6 +57,7 @@ class NativeManagedAppState {
     required this.hidden,
     required this.cloneEligibility,
     required this.installerActionRequired,
+    this.iconBytes,
   });
 
   String packageName;
@@ -69,6 +70,23 @@ class NativeManagedAppState {
   bool hidden;
   NativeCloneEligibility cloneEligibility;
   bool installerActionRequired;
+  Uint8List? iconBytes;
+}
+
+class NativePickedWorkDocument {
+  NativePickedWorkDocument({
+    required this.uri,
+    required this.displayName,
+    required this.mimeType,
+    this.sizeBytes,
+    required this.canDelete,
+  });
+
+  String uri;
+  String displayName;
+  String mimeType;
+  int? sizeBytes;
+  bool canDelete;
 }
 
 class NativeOperationResult {
@@ -85,6 +103,8 @@ abstract class WorkProfileHostApi {
   NativeWorkProfileState getProfileState();
   @asyncCallback
   NativeOperationResult startProvisioning();
+  @asyncCallback
+  NativeOperationResult requestQuietModeDisabled();
   List<NativeManagedAppState> listPersonalApps();
   @asyncCallback
   List<NativeManagedAppState> listWorkApps();
@@ -94,6 +114,10 @@ abstract class WorkProfileHostApi {
   NativeOperationResult cloneToWorkProfile(String packageName);
   @asyncCallback
   NativeOperationResult launchWorkApp(String packageName);
+  @asyncCallback
+  NativePickedWorkDocument? pickWorkDocument();
+  @asyncCallback
+  NativeOperationResult openWorkStore(String packageName);
   @asyncCallback
   NativeOperationResult shareVaultFileToWorkApp(
     String packageName,

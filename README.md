@@ -152,7 +152,7 @@ flutter build apk --debug
 flutter build apk --release
 ```
 
-The generated Flutter Android release configuration currently uses debug signing **only for compile smoke/testing**. Production distribution requires a real release keystore and signing configuration.
+Android release builds never fall back to debug signing. Configure production signing through the ignored `android/key.properties` file (`storeFile`, `storePassword`, `keyAlias`, `keyPassword`) or the `ANDROID_KEYSTORE_PATH`, `ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_ALIAS`, and `ANDROID_KEY_PASSWORD` environment variables. Missing signing inputs fail closed before release-capable app tasks run.
 
 iOS requires macOS/Xcode:
 

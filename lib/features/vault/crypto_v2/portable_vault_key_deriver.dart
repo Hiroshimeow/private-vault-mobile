@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:isolate';
 import 'dart:typed_data';
 
 import 'package:cryptography/cryptography.dart';
@@ -35,53 +36,60 @@ class PortableVaultKeyDeriver {
       throw const PortableVaultInvalidPin();
     }
 
-    final algorithm = Argon2id(
-      parallelism: parallelism,
-      memory: memoryKiB,
-      iterations: iterations,
-      hashLength: hashLength,
-    );
-    final root = await algorithm.deriveKeyFromPassword(
-      password: pin,
-      nonce: utf8.encode(PortableVaultFormatV2.argon2Domain),
-    );
+    final derived = await Isolate.run(() => _derivePortableVaultBytes(pin));
+    final keyBytes = derived.$1;
     try {
-      final bytes = await root.extractBytes();
-      final encryptionBytes = Uint8List.fromList(
-        bytes.sublist(0, PortableVaultFormatV2.cipherKeySize),
-      );
-      final namespaceSeed = Uint8List.fromList(
-        bytes.sublist(
-          PortableVaultFormatV2.cipherKeySize,
-          PortableVaultFormatV2.derivedRootKeySize,
+      return PortableVaultKeyMaterial(
+        encryptionKey: SecretKeyData(
+          Uint8List.fromList(keyBytes),
+          overwriteWhenDestroyed: true,
         ),
+        namespaceId: derived.$2,
       );
-      final encryptionKey = SecretKeyData(
-        encryptionBytes,
-        overwriteWhenDestroyed: true,
-      );
-      try {
-        final namespaceHash = await Sha256().hash([
-          ...utf8.encode(PortableVaultFormatV2.namespaceDomain),
-          ...namespaceSeed,
-        ]);
-        return PortableVaultKeyMaterial(
-          encryptionKey: encryptionKey,
-          namespaceId: _hex(namespaceHash.bytes.sublist(0, 16)),
-        );
-      } on Object {
-        encryptionKey.destroy();
-        rethrow;
-      } finally {
-        namespaceSeed.fillRange(0, namespaceSeed.length, 0);
-      }
     } finally {
-      root.destroy();
+      keyBytes.fillRange(0, keyBytes.length, 0);
     }
   }
+}
 
-  String _hex(List<int> bytes) =>
-      bytes.map((byte) => byte.toRadixString(16).padLeft(2, '0')).join();
+Future<(Uint8List, String)> _derivePortableVaultBytes(String pin) async {
+  final algorithm = Argon2id(
+    parallelism: PortableVaultKeyDeriver.parallelism,
+    memory: PortableVaultKeyDeriver.memoryKiB,
+    iterations: PortableVaultKeyDeriver.iterations,
+    hashLength: PortableVaultKeyDeriver.hashLength,
+  );
+  final root = await algorithm.deriveKeyFromPassword(
+    password: pin,
+    nonce: utf8.encode(PortableVaultFormatV2.argon2Domain),
+  );
+  try {
+    final bytes = await root.extractBytes();
+    final encryptionBytes = Uint8List.fromList(
+      bytes.sublist(0, PortableVaultFormatV2.cipherKeySize),
+    );
+    final namespaceSeed = Uint8List.fromList(
+      bytes.sublist(
+        PortableVaultFormatV2.cipherKeySize,
+        PortableVaultFormatV2.derivedRootKeySize,
+      ),
+    );
+    try {
+      final namespaceHash = await Sha256().hash([
+        ...utf8.encode(PortableVaultFormatV2.namespaceDomain),
+        ...namespaceSeed,
+      ]);
+      final namespaceId = namespaceHash.bytes
+          .sublist(0, 16)
+          .map((byte) => byte.toRadixString(16).padLeft(2, '0'))
+          .join();
+      return (encryptionBytes, namespaceId);
+    } finally {
+      namespaceSeed.fillRange(0, namespaceSeed.length, 0);
+    }
+  } finally {
+    root.destroy();
+  }
 }
 
 class PortableVaultInvalidPin implements Exception {

@@ -27,6 +27,7 @@ class _CalculatorCoverState extends State<CalculatorCover>
   double? _left;
   String? _operator;
   bool _replace = true;
+  String? _suppressedPressKey;
   late final CalculatorUnlockGateController _unlockGate;
 
   @override
@@ -78,7 +79,7 @@ class _CalculatorCoverState extends State<CalculatorCover>
 
   void _digit(String digit) {
     setState(() {
-      if (_replace || _display == '0') {
+      if (_replace) {
         _display = digit;
         _replace = false;
       } else if (_display.length < 14) {
@@ -145,6 +146,10 @@ class _CalculatorCoverState extends State<CalculatorCover>
   }
 
   void _press(String label) {
+    if (_suppressedPressKey == label) {
+      _suppressedPressKey = null;
+      return;
+    }
     if (RegExp(r'^\d$').hasMatch(label)) {
       _digit(label);
     } else if (label == 'C') {
@@ -298,11 +303,18 @@ class _CalculatorCoverState extends State<CalculatorCover>
                                             _unlockGate.keyDown(
                                               labels[(row * 4) + column],
                                             ),
-                                        onPointerUp: (_) => _unlockGate.keyUp(
-                                          labels[(row * 4) + column],
-                                        ),
-                                        onPointerCancel: (_) => _unlockGate
-                                            .cancelHold(notifyRelease: true),
+                                        onPointerUp: (_) {
+                                          final label = labels[(row * 4) + column];
+                                          if (_unlockGate.keyUp(label)) {
+                                            _suppressedPressKey = label;
+                                          }
+                                        },
+                                        onPointerCancel: (_) {
+                                          _suppressedPressKey = null;
+                                          _unlockGate.cancelHold(
+                                            notifyRelease: true,
+                                          );
+                                        },
                                         child: FilledButton(
                                           key: Key(
                                             <String>[

@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:private_vault_mobile/app/private_vault_app.dart';
+import 'package:private_vault_mobile/features/apps/clone_profile_client.dart';
 import 'package:private_vault_mobile/features/apps/work_profile_client.dart';
 import 'package:private_vault_mobile/features/apps/work_profile_models.dart';
 import 'package:private_vault_mobile/features/auth/lock_controller.dart';
@@ -38,6 +39,17 @@ class _FakeWorkProfileClient implements WorkProfileClient {
 
   @override
   Future<WorkProfileOperationResult> startProvisioning() async =>
+      const WorkProfileOperationResult.success();
+
+  @override
+  Future<WorkProfileOperationResult> requestQuietModeDisabled() async =>
+      const WorkProfileOperationResult.success();
+
+  @override
+  Future<PickedWorkDocument?> pickWorkDocument() async => null;
+
+  @override
+  Future<WorkProfileOperationResult> openStore(String packageName) async =>
       const WorkProfileOperationResult.success();
 
   @override
@@ -79,6 +91,7 @@ void main() {
         lockController: lock,
         unlockService: _UnlockService(),
         workProfileClient: _FakeWorkProfileClient(),
+        cloneProfileClient: const UnavailableCloneProfileClient(),
       ),
     );
     await tester.pumpAndSettle();

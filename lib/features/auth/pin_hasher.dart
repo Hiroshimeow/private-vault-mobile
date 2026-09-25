@@ -1,5 +1,7 @@
 import 'dart:convert';
+import 'dart:isolate';
 import 'dart:math';
+import 'dart:typed_data';
 
 import 'package:cryptography/cryptography.dart';
 
@@ -23,11 +25,15 @@ class PinHasher {
   Future<PinVerifier> create(String pin) async {
     final salt = List<int>.generate(16, (_) => Random.secure().nextInt(256));
     final hash = await _derive(pin, salt, iterations);
-    return PinVerifier(
-      salt: base64UrlEncode(salt),
-      hash: base64UrlEncode(hash),
-      iterations: iterations,
-    );
+    try {
+      return PinVerifier(
+        salt: base64UrlEncode(salt),
+        hash: base64UrlEncode(hash),
+        iterations: iterations,
+      );
+    } finally {
+      hash.fillRange(0, hash.length, 0);
+    }
   }
 
   Future<bool> verify(String pin, PinVerifier verifier) async {
@@ -37,24 +43,34 @@ class PinHasher {
       base64Url.decode(verifier.salt),
       verifier.iterations,
     );
-    if (actual.length != expected.length) return false;
-    var difference = 0;
-    for (var i = 0; i < actual.length; i++) {
-      difference |= actual[i] ^ expected[i];
+    try {
+      if (actual.length != expected.length) return false;
+      var difference = 0;
+      for (var i = 0; i < actual.length; i++) {
+        difference |= actual[i] ^ expected[i];
+      }
+      return difference == 0;
+    } finally {
+      actual.fillRange(0, actual.length, 0);
     }
-    return difference == 0;
   }
 
-  Future<List<int>> _derive(String pin, List<int> salt, int count) async {
-    final algorithm = Pbkdf2(
-      macAlgorithm: Hmac.sha256(),
-      iterations: count,
-      bits: 256,
-    );
-    final key = await algorithm.deriveKey(
-      secretKey: SecretKey(utf8.encode(pin)),
-      nonce: salt,
-    );
-    return key.extractBytes();
-  }
+  Future<Uint8List> _derive(String pin, List<int> salt, int count) =>
+      Isolate.run(() async {
+        final algorithm = Pbkdf2(
+          macAlgorithm: Hmac.sha256(),
+          iterations: count,
+          bits: 256,
+        );
+        final key = await algorithm.deriveKey(
+          secretKey: SecretKey(utf8.encode(pin)),
+          nonce: salt,
+        );
+        try {
+          final sensitiveBytes = await key.extractBytes();
+          return Uint8List.fromList(sensitiveBytes);
+        } finally {
+          key.destroy();
+        }
+      });
 }

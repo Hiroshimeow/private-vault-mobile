@@ -212,4 +212,32 @@ void main() {
       expect(lock.isLocked, isTrue);
     },
   );
+
+  testWidgets('PIN release after threshold does not cancel active verification', (tester) async {
+    final lock = LockController();
+    final unlock = DeferredUnlockService();
+    await tester.pumpWidget(
+      PrivateVaultApp(
+        lockController: lock,
+        unlockService: unlock,
+        initialSettings: const AppSettings.defaults().copyWith(unlockHoldMs: 700),
+      ),
+    );
+    await tester.pump();
+
+    for (final digit in '1123'.split('')) {
+      await tester.tap(find.byKey(Key('calculator-key-$digit')));
+    }
+    final trigger = find.byKey(const Key('calculator-key-1'));
+    final gesture = await tester.startGesture(tester.getCenter(trigger));
+    await tester.pump(const Duration(milliseconds: 700));
+    expect(unlock.verifyCalls, 1);
+
+    await gesture.up();
+    await tester.pump();
+    unlock.verification.complete(true);
+    await tester.pumpAndSettle();
+    expect(lock.isLocked, isFalse);
+  });
+
 }

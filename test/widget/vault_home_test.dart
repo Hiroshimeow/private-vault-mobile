@@ -325,7 +325,7 @@ void main() {
       await tester.tap(find.byKey(Key('vault-tile-${item.id}')));
       await tester.pumpAndSettle();
 
-      expect(find.byKey(const Key('vault-fullscreen-image')), findsOneWidget);
+      expect(find.byKey(Key('vault-fullscreen-image-${item.id}')), findsOneWidget);
       expect(find.byType(InteractiveViewer), findsOneWidget);
       expect(find.byKey(const Key('vault-image-export')), findsOneWidget);
       expect(find.byKey(const Key('vault-image-delete')), findsOneWidget);
@@ -558,4 +558,94 @@ void main() {
       findsNothing,
     );
   });
+
+  testWidgets('image viewer has explicit back and swipes between adjacent images', (tester) async {
+    final repository = FakeVaultRepository();
+    repository.items.clear();
+    repository.bytesById.clear();
+    for (var index = 0; index < 3; index += 1) {
+      final item = VaultItem(
+        id: 'image-$index',
+        kind: VaultItemKind.image,
+        createdAt: DateTime.utc(2026, 9, 18, index + 1),
+      );
+      repository.items.add(item);
+      repository.bytesById[item.id] = Uint8List.fromList(
+        img.encodePng(img.Image(width: 2, height: 2)),
+      );
+    }
+    final media = MediaVaultService(
+      repository: repository,
+      pickImport: () async => null,
+      capturePhoto: () async => null,
+      saveExport: (_, _) async => true,
+    );
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: VaultHome(repository: repository, media: media, confirmExport: false),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byKey(const Key('vault-tile-image-0')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('vault-image-back')), findsOneWidget);
+    expect(find.byKey(const Key('vault-image-page-view')), findsOneWidget);
+    expect(find.text('1 / 3'), findsOneWidget);
+    expect(repository.readBytesCalls, lessThanOrEqualTo(2));
+
+    await tester.drag(find.byKey(const Key('vault-image-page-view')), const Offset(-400, 0));
+    await tester.pumpAndSettle();
+    expect(find.text('2 / 3'), findsOneWidget);
+    expect(repository.readBytesCalls, lessThanOrEqualTo(3));
+
+    await tester.tap(find.byKey(const Key('vault-image-back')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('vault-image-page-view')), findsNothing);
+    expect(find.byKey(const Key('vault-tile-image-0')), findsOneWidget);
+  });
+
+
+  testWidgets('system back pops only the image viewer', (tester) async {
+    final repository = FakeVaultRepository();
+    repository.items.clear();
+    repository.bytesById.clear();
+    final item = VaultItem(
+      id: 'back-image',
+      kind: VaultItemKind.image,
+      createdAt: DateTime.utc(2026, 9, 18, 1),
+    );
+    repository.items.add(item);
+    repository.bytesById[item.id] = Uint8List.fromList(
+      img.encodePng(img.Image(width: 2, height: 2)),
+    );
+    final media = MediaVaultService(
+      repository: repository,
+      pickImport: () async => null,
+      capturePhoto: () async => null,
+      saveExport: (_, _) async => true,
+    );
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: VaultHome(repository: repository, media: media, confirmExport: false),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('vault-tile-back-image')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('vault-image-page-view')), findsOneWidget);
+
+    await tester.binding.handlePopRoute();
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const Key('vault-image-page-view')), findsNothing);
+    expect(find.byKey(const Key('vault-tile-back-image')), findsOneWidget);
+  });
+
 }

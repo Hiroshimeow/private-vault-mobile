@@ -90,6 +90,9 @@
                 <action android:name="io.hiroshimeow.private_vault_mobile.action.GET_APP_STATE" />
                 <action android:name="io.hiroshimeow.private_vault_mobile.action.CLONE" />
                 <action android:name="io.hiroshimeow.private_vault_mobile.action.LAUNCH" />
+                <action android:name="io.hiroshimeow.private_vault_mobile.action.PICK_WORK_DOCUMENT" />
+                <action android:name="io.hiroshimeow.private_vault_mobile.action.OPEN_STORE" />
+                <action android:name="io.hiroshimeow.private_vault_mobile.action.SHARE_VAULT_FILE" />
                 <action android:name="io.hiroshimeow.private_vault_mobile.action.SUSPEND" />
                 <action android:name="io.hiroshimeow.private_vault_mobile.action.HIDE" />
                 <action android:name="io.hiroshimeow.private_vault_mobile.action.UNINSTALL" />

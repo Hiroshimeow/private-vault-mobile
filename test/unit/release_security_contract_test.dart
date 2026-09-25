@@ -44,4 +44,87 @@ void main() {
     expect(backup, contains('exclude domain="root" path="."'));
     expect(extraction, contains('disableIfNoEncryptionCapabilities="true"'));
   });
+
+  test(
+    'Android release signing never falls back to debug credentials',
+    () async {
+      final gradle = await File('android/app/build.gradle.kts').readAsString();
+      expect(gradle, isNot(contains('signingConfigs.getByName("debug")')));
+      expect(gradle, contains('signingConfigs.getByName("release")'));
+      expect(gradle, contains('ANDROID_KEYSTORE_PATH'));
+      expect(gradle, contains('ANDROID_KEYSTORE_PASSWORD'));
+      expect(gradle, contains('ANDROID_KEY_ALIAS'));
+      expect(gradle, contains('ANDROID_KEY_PASSWORD'));
+      expect(gradle, contains('Release signing is not configured.'));
+      expect(gradle, contains('setOf("assemble", "build", "bundle")'));
+      expect(
+        gradle,
+        contains('setOf("assembleRelease", "bundleRelease", "installRelease")'),
+      );
+      expect(
+        gradle,
+        isNot(contains('selector.contains("release", ignoreCase = true)')),
+      );
+      expect(gradle, contains("taskName.substringAfterLast(':')"));
+      expect(gradle, contains("taskName.lastIndexOf(':')"));
+      expect(gradle, contains('requestedProjectPath == project.path'));
+      expect(
+        gradle,
+        contains(
+          'gradle.startParameter.taskNames.any(::releaseSigningTaskRequested)',
+        ),
+      );
+    },
+  );
+
+  test('README documents fail-closed Android release signing', () async {
+    final readme = await File('README.md').readAsString();
+    expect(
+      readme,
+      isNot(contains('release configuration currently uses debug signing')),
+    );
+    expect(
+      readme,
+      contains('Android release builds never fall back to debug signing'),
+    );
+    expect(readme, contains('android/key.properties'));
+    expect(readme, contains('ANDROID_KEYSTORE_PATH'));
+    expect(readme, contains('Missing signing inputs fail closed'));
+  });
+
+  test('CI treats unsigned release as an expected signing failure', () async {
+    final workflow = await File('.github/workflows/ci.yml').readAsString();
+    expect(
+      workflow,
+      contains('Verify release signing fails closed without secrets'),
+    );
+    expect(workflow, contains(r'test "$status" -ne 0'));
+    expect(workflow, contains('Release signing is not configured.'));
+    expect(
+      workflow,
+      contains('Verify aggregate Android build fails closed without secrets'),
+    );
+    expect(workflow, contains('./gradlew :app:assemble --dry-run'));
+    expect(
+      workflow,
+      contains(
+        'Verify release-variant development tasks do not require signing',
+      ),
+    );
+    expect(workflow, contains('./gradlew :app:testReleaseUnitTest --dry-run'));
+    expect(workflow, contains('./gradlew :app:compileReleaseKotlin --dry-run'));
+    expect(
+      workflow,
+      contains('Verify unrelated modules do not require app signing'),
+    );
+    expect(
+      workflow,
+      contains('./gradlew :android_file_picker:build --dry-run'),
+    );
+    expect(
+      workflow,
+      contains('./gradlew :android_file_picker:assembleRelease --dry-run'),
+    );
+    expect(workflow, isNot(contains('Build release APK smoke')));
+  });
 }

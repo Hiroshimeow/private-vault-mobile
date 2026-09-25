@@ -1,9 +1,11 @@
+import 'dart:convert';
 import 'dart:math';
 import 'dart:typed_data';
 
 import 'package:cryptography/cryptography.dart';
 import 'package:private_vault_mobile/core/crypto/vault_crypto.dart';
 import 'package:private_vault_mobile/features/vault/crypto_v2/portable_vault_format.dart';
+import 'package:private_vault_mobile/features/vault/crypto_v2/portable_vault_key_deriver.dart';
 import 'package:private_vault_mobile/features/vault/crypto_v2/portable_vault_object_codec.dart';
 import 'package:private_vault_mobile/features/vault/portable_storage/portable_vault_session.dart';
 import 'package:private_vault_mobile/features/vault/portable_storage/portable_vault_storage.dart';
@@ -13,6 +15,7 @@ class PortableVaultRepository
     implements
         VaultScanAwareRepository,
         TransactionalPinSessionVaultRepository,
+        PreparablePinSessionVaultRepository,
         StreamingVaultRepository,
         VaultThumbnailRepository {
   PortableVaultRepository({
@@ -24,7 +27,12 @@ class PortableVaultRepository
   final PortableVaultStorage storage;
   final PortableVaultSession session;
   final PortableVaultObjectCodec objectCodec;
-  final Set<String> _activeStreamWriteIds = <String>{};
+
+  static final Expando<Set<String>> _activeWritesByStorage =
+      Expando<Set<String>>('portable-vault-active-writes');
+
+  Set<String> get _activeStreamWriteIds =>
+      _activeWritesByStorage[storage] ??= <String>{};
 
   @override
   bool get hasOpenSession => session.isOpen;
@@ -40,6 +48,29 @@ class PortableVaultRepository
   @override
   Future<int> openSessionWithGeneration(String pin) =>
       session.openWithGeneration(pin);
+
+  @override
+  Future<PreparedPinSession> prepareSession(String pin) async {
+    final expectedGeneration = session.generation;
+    final material = await session.prepare(pin);
+    if (session.generation != expectedGeneration) {
+      material.destroy();
+      throw const PortableVaultSessionChangedException();
+    }
+    return _PortablePreparedPinSession(material, expectedGeneration);
+  }
+
+  @override
+  int activatePreparedSession(PreparedPinSession prepared) {
+    if (prepared is! _PortablePreparedPinSession || prepared.consumed) {
+      throw const PortableVaultSessionChangedException();
+    }
+    prepared.consumed = true;
+    return session.activate(
+      prepared.material,
+      expectedGeneration: prepared.expectedGeneration,
+    );
+  }
 
   @override
   void clearSessionIfGeneration(int generation) =>
@@ -95,24 +126,14 @@ class PortableVaultRepository
       ),
       material.encryptionKey,
     );
-    final payloadPath = _objectPath(material.namespaceId, id);
-    await storage.write(payloadPath, encoded);
-    try {
-      await _writeMetadata(
-        namespaceId: material.namespaceId,
-        encryptionKey: material.encryptionKey,
-        id: id,
-        mediaType: _mediaTypeFor(kind),
-        createdAt: createdAt,
-      );
-    } on Object {
-      try {
-        await storage.delete(payloadPath);
-      } on Object {
-        // A later scan will surface any orphan payload.
-      }
-      rethrow;
-    }
+    await storage.write(_objectPath(material.namespaceId, id), encoded);
+    await _upsertCatalogBestEffort(
+      namespaceId: material.namespaceId,
+      encryptionKey: material.encryptionKey,
+      id: id,
+      mediaType: _mediaTypeFor(kind),
+      createdAtMillis: createdAt.millisecondsSinceEpoch,
+    );
     return VaultItem(id: id, kind: kind, createdAt: createdAt);
   }
 
@@ -168,23 +189,13 @@ class PortableVaultRepository
       _activeStreamWriteIds.remove(id);
     }
 
-    final payloadPath = _objectPath(material.namespaceId, id);
-    try {
-      await _writeMetadata(
-        namespaceId: material.namespaceId,
-        encryptionKey: material.encryptionKey,
-        id: id,
-        mediaType: _mediaTypeFor(kind),
-        createdAt: createdAt,
-      );
-    } on Object {
-      try {
-        await storage.delete(payloadPath);
-      } on Object {
-        // A later scan will surface any orphan payload.
-      }
-      rethrow;
-    }
+    await _upsertCatalogBestEffort(
+      namespaceId: material.namespaceId,
+      encryptionKey: material.encryptionKey,
+      id: id,
+      mediaType: _mediaTypeFor(kind),
+      createdAtMillis: createdAt.millisecondsSinceEpoch,
+    );
     return VaultItem(id: id, kind: kind, createdAt: createdAt);
   }
 
@@ -206,33 +217,34 @@ class PortableVaultRepository
   Future<Uint8List?> readThumbnail(String id) async {
     await _requireAccess();
     final material = session.requireMaterial();
-    try {
-      final encoded = await storage.read(
-        _thumbnailPath(material.namespaceId, id),
-      );
-      final thumbnail = await objectCodec.decode(
-        encoded,
-        material.encryptionKey,
-      );
-      if (thumbnail.namespaceId != material.namespaceId ||
-          thumbnail.fileName != '$id.thumb' ||
-          thumbnail.mediaType != 'image/jpeg' ||
-          thumbnail.bytes.isEmpty) {
-        throw const PortableVaultFormatException();
+    for (final path in [
+      _thumbnailPath(material.namespaceId, id),
+      _legacyThumbnailPath(material.namespaceId, id),
+    ]) {
+      try {
+        final encoded = await storage.read(path);
+        final thumbnail = await objectCodec.decode(
+          encoded,
+          material.encryptionKey,
+        );
+        if (thumbnail.namespaceId != material.namespaceId ||
+            thumbnail.fileName != '$id.thumb' ||
+            thumbnail.mediaType != 'image/jpeg' ||
+            thumbnail.bytes.isEmpty) {
+          throw const PortableVaultFormatException();
+        }
+        return thumbnail.bytes;
+      } on PortableVaultStorageNotFoundException {
+        continue;
+      } on PortableVaultUnsupportedProfileException {
+        await _deleteAuxiliaryBestEffort(path);
+      } on VaultIntegrityException {
+        await _deleteAuxiliaryBestEffort(path);
+      } on PortableVaultFormatException {
+        await _deleteAuxiliaryBestEffort(path);
       }
-      return thumbnail.bytes;
-    } on PortableVaultStorageNotFoundException {
-      return null;
-    } on PortableVaultUnsupportedProfileException {
-      await _deleteThumbnailBestEffort(material.namespaceId, id);
-      return null;
-    } on VaultIntegrityException {
-      await _deleteThumbnailBestEffort(material.namespaceId, id);
-      return null;
-    } on PortableVaultFormatException {
-      await _deleteThumbnailBestEffort(material.namespaceId, id);
-      return null;
     }
+    return null;
   }
 
   @override
@@ -240,15 +252,15 @@ class PortableVaultRepository
     if (bytes.isEmpty) return;
     await _requireAccess();
     final material = session.requireMaterial();
-    final metadataEncoded = await storage.read(
-      _metadataPath(material.namespaceId, id),
+    final payloadEncoded = await storage.read(
+      _objectPath(material.namespaceId, id),
     );
-    final metadata = await objectCodec.decode(
-      metadataEncoded,
+    final payload = await objectCodec.decode(
+      payloadEncoded,
       material.encryptionKey,
     );
-    _validateMetadataIdentity(
-      metadata,
+    _validatePayloadIdentity(
+      payload,
       expectedNamespace: material.namespaceId,
       expectedId: id,
     );
@@ -256,7 +268,7 @@ class PortableVaultRepository
       PortableVaultObject(
         fileName: '$id.thumb',
         mediaType: 'image/jpeg',
-        createdAtMillis: metadata.createdAtMillis,
+        createdAtMillis: payload.createdAtMillis,
         namespaceId: material.namespaceId,
         bytes: bytes,
       ),
@@ -279,8 +291,17 @@ class PortableVaultRepository
     final basePath = '${material.namespaceId}/objects';
 
     late final List<String> names;
+    var entryMetadata = <String, PortableVaultStorageEntryMetadata>{};
     try {
-      names = await storage.list(basePath);
+      final targetStorage = storage;
+      if (targetStorage is PortableVaultMetadataStorage) {
+        final entries = await (targetStorage as PortableVaultMetadataStorage)
+            .listMetadata(basePath);
+        entryMetadata = {for (final entry in entries) entry.name: entry};
+        names = entryMetadata.keys.toList(growable: false);
+      } else {
+        names = await storage.list(basePath);
+      }
     } on PortableVaultStorageException {
       return const VaultScanResult(items: [], storageFailureCount: 1);
     }
@@ -301,7 +322,7 @@ class PortableVaultRepository
             survives = false;
           } on PortableVaultStorageException {
             // Abandoned temp cleanup is best effort. Preserve matching
-            // sidecars while the partial itself still exists.
+            // legacy sidecars while the partial itself still exists.
           }
         }
         if (survives && partialId != null) {
@@ -320,13 +341,24 @@ class PortableVaultRepository
         .where((name) => name.endsWith('.pvm'))
         .map((name) => name.substring(0, name.length - '.pvm'.length))
         .toSet();
-    final thumbnailIds = visibleNames
+    final legacyThumbnailIds = visibleNames
         .where((name) => name.endsWith('.pvt'))
         .map((name) => name.substring(0, name.length - '.pvt'.length))
         .toSet();
+    final thumbnailCachePath = '${material.namespaceId}/cache/thumbnails';
+    Set<String> modernThumbnailIds = const <String>{};
+    try {
+      modernThumbnailIds = (await storage.list(thumbnailCachePath))
+          .where((name) => name.endsWith('.pvt'))
+          .map((name) => name.substring(0, name.length - '.pvt'.length))
+          .toSet();
+    } on PortableVaultStorageException {
+      // Cache discovery is best effort and cannot make payload listing fail.
+    }
 
     final orphanSidecarIds = metadataIds
-        .union(thumbnailIds)
+        .union(legacyThumbnailIds)
+        .union(modernThumbnailIds)
         .difference(payloadIds)
         .difference(survivingPartialIds);
     final orphanedSidecarCount = orphanSidecarIds.length;
@@ -335,24 +367,44 @@ class PortableVaultRepository
         try {
           await storage.delete('$basePath/$id.pvm');
         } on PortableVaultStorageException {
-          // Payload-less metadata is reconstructible cache garbage.
+          // Payload-less metadata is reconstructible compatibility cache.
         }
       }
-      if (thumbnailIds.contains(id)) {
+      if (legacyThumbnailIds.contains(id)) {
         try {
           await storage.delete('$basePath/$id.pvt');
         } on PortableVaultStorageException {
-          // Payload-less thumbnails are reconstructible cache garbage.
+          // Legacy thumbnail cache is reconstructible.
+        }
+      }
+      if (modernThumbnailIds.contains(id)) {
+        try {
+          await storage.delete('$thumbnailCachePath/$id.pvt');
+        } on PortableVaultStorageException {
+          // Modern thumbnail cache is equally reconstructible.
         }
       }
     }
 
+    final catalog = await _readCatalog(
+      namespaceId: material.namespaceId,
+      encryptionKey: material.encryptionKey,
+    );
+    final resolvedCatalog = <String, _PortableCatalogEntry>{};
     final items = <VaultItem>[];
     var corruptCount = 0;
     var unsupportedCount = 0;
     var foreignCount = 0;
 
     for (final id in payloadIds) {
+      final metadata = entryMetadata['$id.pvb'];
+      final cached = catalog[id];
+      if (cached != null && metadata != null && cached.matches(metadata)) {
+        resolvedCatalog[id] = cached;
+        items.add(_catalogItem(cached));
+        continue;
+      }
+
       try {
         final object = await _loadListingMetadata(
           namespaceId: material.namespaceId,
@@ -361,16 +413,19 @@ class PortableVaultRepository
           id: id,
           hasSidecar: metadataIds.contains(id),
         );
-        items.add(
-          VaultItem(
-            id: id,
-            kind: _kindFromMediaType(object.mediaType),
-            createdAt: DateTime.fromMillisecondsSinceEpoch(
-              object.createdAtMillis,
-              isUtc: true,
-            ),
-          ),
+        final entry = _PortableCatalogEntry(
+          id: id,
+          mediaType: object.mediaType,
+          createdAtMillis: object.createdAtMillis,
+          sizeBytes: metadata?.hasSizeFingerprint == true
+              ? metadata!.sizeBytes
+              : null,
+          modifiedAtMillis: metadata?.hasReliableModificationTime == true
+              ? metadata!.modifiedAtMillis
+              : null,
         );
+        resolvedCatalog[id] = entry;
+        items.add(_catalogItem(entry));
       } on PortableVaultForeignObjectException {
         foreignCount += 1;
       } on PortableVaultUnsupportedProfileException {
@@ -382,6 +437,19 @@ class PortableVaultRepository
       } on PortableVaultStorageException {
         storageFailureCount += 1;
       }
+    }
+
+    final catalogChanged =
+        catalog.length != resolvedCatalog.length ||
+        resolvedCatalog.entries.any(
+          (entry) => catalog[entry.key] != entry.value,
+        );
+    if (catalogChanged) {
+      await _writeCatalogBestEffort(
+        namespaceId: material.namespaceId,
+        encryptionKey: material.encryptionKey,
+        entries: resolvedCatalog,
+      );
     }
 
     items.sort((a, b) => b.createdAt.compareTo(a.createdAt));
@@ -401,7 +469,15 @@ class PortableVaultRepository
     final material = session.requireMaterial();
     await storage.delete(_objectPath(material.namespaceId, id));
     await _deleteAuxiliaryBestEffort(_metadataPath(material.namespaceId, id));
+    await _deleteAuxiliaryBestEffort(
+      _legacyThumbnailPath(material.namespaceId, id),
+    );
     await _deleteAuxiliaryBestEffort(_thumbnailPath(material.namespaceId, id));
+    await _removeFromCatalogBestEffort(
+      namespaceId: material.namespaceId,
+      encryptionKey: material.encryptionKey,
+      id: id,
+    );
   }
 
   Future<void> _deleteAuxiliaryBestEffort(String path) async {
@@ -455,6 +531,23 @@ class PortableVaultRepository
     required String id,
     required bool hasSidecar,
   }) async {
+    // The .pvb payload is authoritative. Listing caches may accelerate metadata
+    // recovery, but they must never make a corrupt payload appear healthy.
+    final payloadEncoded = await storage.read('$basePath/$id.pvb');
+    final payload = await objectCodec.decode(payloadEncoded, encryptionKey);
+    _validatePayloadIdentity(
+      payload,
+      expectedNamespace: namespaceId,
+      expectedId: id,
+    );
+    final payloadMetadata = PortableVaultObject(
+      fileName: '$id.meta',
+      mediaType: payload.mediaType,
+      createdAtMillis: payload.createdAtMillis,
+      namespaceId: payload.namespaceId,
+      bytes: Uint8List(0),
+    );
+
     if (hasSidecar) {
       try {
         final encoded = await storage.read('$basePath/$id.pvm');
@@ -464,9 +557,9 @@ class PortableVaultRepository
           expectedNamespace: namespaceId,
           expectedId: id,
         );
-        return metadata;
+        return payloadMetadata;
       } on PortableVaultStorageNotFoundException {
-        // Fall through to payload recovery.
+        // Fall through to authenticated payload metadata.
       } on PortableVaultUnsupportedProfileException {
         // A damaged listing cache is recoverable from the authenticated payload.
       } on VaultIntegrityException {
@@ -476,54 +569,128 @@ class PortableVaultRepository
       }
     }
 
-    final encoded = await storage.read('$basePath/$id.pvb');
-    final payload = await objectCodec.decode(encoded, encryptionKey);
-    _validatePayloadIdentity(
-      payload,
-      expectedNamespace: namespaceId,
-      expectedId: id,
-    );
-    try {
-      await _writeMetadata(
-        namespaceId: namespaceId,
-        encryptionKey: encryptionKey,
-        id: id,
-        mediaType: payload.mediaType,
-        createdAt: DateTime.fromMillisecondsSinceEpoch(
-          payload.createdAtMillis,
-          isUtc: true,
-        ),
-      );
-    } on Object {
-      // Listing metadata is a cache. A readable payload remains authoritative.
-    }
-    return PortableVaultObject(
-      fileName: '$id.meta',
-      mediaType: payload.mediaType,
-      createdAtMillis: payload.createdAtMillis,
-      namespaceId: payload.namespaceId,
-      bytes: Uint8List(0),
-    );
+    return payloadMetadata;
   }
 
-  Future<void> _writeMetadata({
+  static const _catalogMediaType = 'application/vnd.private-vault.catalog+json';
+
+  Future<Map<String, _PortableCatalogEntry>> _readCatalog({
+    required String namespaceId,
+    required SecretKey encryptionKey,
+  }) async {
+    try {
+      final encoded = await storage.read(_catalogPath(namespaceId));
+      final object = await objectCodec.decode(encoded, encryptionKey);
+      if (object.namespaceId != namespaceId ||
+          object.fileName != 'catalog.json' ||
+          object.mediaType != _catalogMediaType) {
+        throw const PortableVaultFormatException();
+      }
+      final decoded = jsonDecode(utf8.decode(object.bytes));
+      if (decoded is! List) throw const PortableVaultFormatException();
+      final entries = <String, _PortableCatalogEntry>{};
+      for (final value in decoded) {
+        final entry = _PortableCatalogEntry.fromJson(value);
+        entries[entry.id] = entry;
+      }
+      return entries;
+    } on PortableVaultStorageNotFoundException {
+      return <String, _PortableCatalogEntry>{};
+    } on PortableVaultStorageException {
+      return <String, _PortableCatalogEntry>{};
+    } on PortableVaultUnsupportedProfileException {
+      return <String, _PortableCatalogEntry>{};
+    } on VaultIntegrityException {
+      return <String, _PortableCatalogEntry>{};
+    } on PortableVaultFormatException {
+      return <String, _PortableCatalogEntry>{};
+    } on FormatException {
+      return <String, _PortableCatalogEntry>{};
+    }
+  }
+
+  Future<void> _writeCatalogBestEffort({
+    required String namespaceId,
+    required SecretKey encryptionKey,
+    required Map<String, _PortableCatalogEntry> entries,
+  }) async {
+    try {
+      final ordered = entries.values.toList()
+        ..sort((a, b) => b.createdAtMillis.compareTo(a.createdAtMillis));
+      final encoded = await objectCodec.encode(
+        PortableVaultObject(
+          fileName: 'catalog.json',
+          mediaType: _catalogMediaType,
+          createdAtMillis: DateTime.now().toUtc().millisecondsSinceEpoch,
+          namespaceId: namespaceId,
+          bytes: Uint8List.fromList(
+            utf8.encode(
+              jsonEncode(ordered.map((entry) => entry.toJson()).toList()),
+            ),
+          ),
+        ),
+        encryptionKey,
+      );
+      await storage.write(_catalogPath(namespaceId), encoded);
+    } on Object {
+      // The catalog is a reconstructible cache. Payload commit stays authoritative.
+    }
+  }
+
+  Future<void> _upsertCatalogBestEffort({
     required String namespaceId,
     required SecretKey encryptionKey,
     required String id,
     required String mediaType,
-    required DateTime createdAt,
+    required int createdAtMillis,
   }) async {
-    final encoded = await objectCodec.encode(
-      PortableVaultObject(
-        fileName: '$id.meta',
-        mediaType: mediaType,
-        createdAtMillis: createdAt.millisecondsSinceEpoch,
-        namespaceId: namespaceId,
-        bytes: Uint8List(0),
-      ),
-      encryptionKey,
+    final entries = await _readCatalog(
+      namespaceId: namespaceId,
+      encryptionKey: encryptionKey,
     );
-    await storage.write(_metadataPath(namespaceId, id), encoded);
+    PortableVaultStorageEntryMetadata? metadata;
+    final targetStorage = storage;
+    if (targetStorage is PortableVaultEntryMetadataStorage) {
+      try {
+        metadata = await (targetStorage as PortableVaultEntryMetadataStorage)
+            .metadata(_objectPath(namespaceId, id));
+      } on PortableVaultStorageException {
+        // Payload commit remains authoritative; fingerprint can be learned later.
+      }
+    }
+    entries[id] = _PortableCatalogEntry(
+      id: id,
+      mediaType: mediaType,
+      createdAtMillis: createdAtMillis,
+      sizeBytes: metadata?.hasSizeFingerprint == true
+          ? metadata!.sizeBytes
+          : null,
+      modifiedAtMillis: metadata?.hasReliableModificationTime == true
+          ? metadata!.modifiedAtMillis
+          : null,
+    );
+    await _writeCatalogBestEffort(
+      namespaceId: namespaceId,
+      encryptionKey: encryptionKey,
+      entries: entries,
+    );
+  }
+
+  Future<void> _removeFromCatalogBestEffort({
+    required String namespaceId,
+    required SecretKey encryptionKey,
+    required String id,
+  }) async {
+    final entries = await _readCatalog(
+      namespaceId: namespaceId,
+      encryptionKey: encryptionKey,
+    );
+    if (entries.remove(id) == null) return;
+    await _writeCatalogBestEffort(
+      namespaceId: namespaceId,
+      encryptionKey: encryptionKey,
+      entries: entries,
+    );
   }
 
   Future<void> _requireAccess() async {
@@ -558,6 +725,8 @@ class PortableVaultRepository
     }
   }
 
+  String _catalogPath(String namespaceId) => '$namespaceId/catalog.pvc';
+
   String _objectPath(String namespaceId, String id) =>
       '$namespaceId/objects/$id.pvb';
 
@@ -565,15 +734,10 @@ class PortableVaultRepository
       '$namespaceId/objects/$id.pvm';
 
   String _thumbnailPath(String namespaceId, String id) =>
-      '$namespaceId/objects/$id.pvt';
+      '$namespaceId/cache/thumbnails/$id.pvt';
 
-  Future<void> _deleteThumbnailBestEffort(String namespaceId, String id) async {
-    try {
-      await storage.delete(_thumbnailPath(namespaceId, id));
-    } on Object {
-      // Thumbnail cache is reconstructible; preserve the primary read result.
-    }
-  }
+  String _legacyThumbnailPath(String namespaceId, String id) =>
+      '$namespaceId/objects/$id.pvt';
 
   String _newId() {
     final random = Random.secure();
@@ -592,11 +756,111 @@ class PortableVaultRepository
     VaultItemKind.unknown => throw StateError('unknown kind'),
   };
 
+  VaultItem _catalogItem(_PortableCatalogEntry entry) => VaultItem(
+    id: entry.id,
+    kind: _kindFromMediaType(entry.mediaType),
+    createdAt: DateTime.fromMillisecondsSinceEpoch(
+      entry.createdAtMillis,
+      isUtc: true,
+    ),
+  );
+
   VaultItemKind _kindFromMediaType(String mediaType) {
     if (mediaType == 'text/plain') return VaultItemKind.note;
     if (mediaType.startsWith('image/')) return VaultItemKind.image;
     if (mediaType.startsWith('video/')) return VaultItemKind.video;
     return VaultItemKind.document;
+  }
+}
+
+class _PortableCatalogEntry {
+  const _PortableCatalogEntry({
+    required this.id,
+    required this.mediaType,
+    required this.createdAtMillis,
+    this.sizeBytes,
+    this.modifiedAtMillis,
+  });
+
+  final String id;
+  final String mediaType;
+  final int createdAtMillis;
+  final int? sizeBytes;
+  final int? modifiedAtMillis;
+
+  bool matches(PortableVaultStorageEntryMetadata metadata) {
+    if (!metadata.hasSizeFingerprint || sizeBytes != metadata.sizeBytes) {
+      return false;
+    }
+    if (metadata.hasReliableModificationTime) {
+      return modifiedAtMillis == metadata.modifiedAtMillis;
+    }
+    // Some SAF providers expose size but no stable mtime. Size is sufficient
+    // only for the interactive listing cache; payload reads remain authenticated.
+    return modifiedAtMillis == null;
+  }
+
+  Map<String, Object> toJson() => <String, Object>{
+    'id': id,
+    'type': mediaType,
+    'created': createdAtMillis,
+    'size': ?sizeBytes,
+    'modified': ?modifiedAtMillis,
+  };
+
+  static _PortableCatalogEntry fromJson(Object? value) {
+    if (value is! Map) throw const PortableVaultFormatException();
+    final id = value['id'];
+    final mediaType = value['type'];
+    final createdAtMillis = value['created'];
+    final sizeBytes = value['size'];
+    final modifiedAtMillis = value['modified'];
+    if (id is! String ||
+        id.isEmpty ||
+        mediaType is! String ||
+        mediaType.isEmpty ||
+        createdAtMillis is! int ||
+        createdAtMillis < 0 ||
+        (sizeBytes != null && (sizeBytes is! int || sizeBytes < 0)) ||
+        (modifiedAtMillis != null &&
+            (modifiedAtMillis is! int || modifiedAtMillis <= 0))) {
+      throw const PortableVaultFormatException();
+    }
+    return _PortableCatalogEntry(
+      id: id,
+      mediaType: mediaType,
+      createdAtMillis: createdAtMillis,
+      sizeBytes: sizeBytes as int?,
+      modifiedAtMillis: modifiedAtMillis as int?,
+    );
+  }
+
+  @override
+  bool operator ==(Object other) =>
+      other is _PortableCatalogEntry &&
+      other.id == id &&
+      other.mediaType == mediaType &&
+      other.createdAtMillis == createdAtMillis &&
+      other.sizeBytes == sizeBytes &&
+      other.modifiedAtMillis == modifiedAtMillis;
+
+  @override
+  int get hashCode =>
+      Object.hash(id, mediaType, createdAtMillis, sizeBytes, modifiedAtMillis);
+}
+
+class _PortablePreparedPinSession implements PreparedPinSession {
+  _PortablePreparedPinSession(this.material, this.expectedGeneration);
+
+  final PortableVaultKeyMaterial material;
+  final int expectedGeneration;
+  bool consumed = false;
+
+  @override
+  void destroy() {
+    if (consumed) return;
+    consumed = true;
+    material.destroy();
   }
 }
 

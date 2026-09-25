@@ -1,5 +1,7 @@
 import 'dart:async';
 
+import 'package:private_vault_mobile/features/auth/unlock_performance_trace.dart';
+
 enum CalculatorUnlockMode { pin, biometric }
 
 enum CalculatorUnlockTrigger { secondPinDigit, equals }
@@ -78,9 +80,17 @@ class CalculatorUnlockGateController {
     _idleTimer = null;
     _heldKey = key;
     _activeTrigger = trigger;
+    UnlockPerformanceTrace.mark(
+      'hold_pointer_down',
+      fields: {'trigger': trigger.name, 'hold_ms': holdDuration.inMilliseconds},
+    );
     _holdTimer = Timer(holdDuration, () {
       if (_heldKey != key || _activeTrigger != trigger) return;
       _triggered = true;
+      UnlockPerformanceTrace.mark(
+        'hold_threshold_fired',
+        fields: {'trigger': trigger.name},
+      );
       onTriggered(
         CalculatorUnlockAttempt(candidate: _digits, trigger: trigger),
       );

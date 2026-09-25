@@ -1,3 +1,4 @@
+import 'package:flutter/services.dart';
 import 'package:private_vault_mobile/features/apps/work_profile_models.dart';
 import 'package:private_vault_mobile/platform/generated/work_profile_api.g.dart'
     as native;
@@ -6,6 +7,9 @@ abstract interface class WorkProfileClient {
   Future<WorkProfileCapability> getCapability();
   Future<List<ManagedAppState>> listApps();
   Future<WorkProfileOperationResult> startProvisioning();
+  Future<WorkProfileOperationResult> requestQuietModeDisabled();
+  Future<PickedWorkDocument?> pickWorkDocument();
+  Future<WorkProfileOperationResult> openStore(String packageName);
   Future<WorkProfileOperationResult> clone(String packageName);
   Future<WorkProfileOperationResult> launch(String packageName);
   Future<WorkProfileOperationResult> setSuspended(
@@ -58,6 +62,7 @@ class PigeonWorkProfileClient implements WorkProfileClient {
               hidden: mapped.hidden,
               cloneEligibility: mapped.cloneEligibility,
               installerActionRequired: mapped.installerActionRequired,
+              iconBytes: mapped.iconBytes ?? current.iconBytes,
             );
     }
 
@@ -69,6 +74,34 @@ class PigeonWorkProfileClient implements WorkProfileClient {
   @override
   Future<WorkProfileOperationResult> startProvisioning() async =>
       _operation(await _api.startProvisioning());
+
+  @override
+  Future<WorkProfileOperationResult> requestQuietModeDisabled() async =>
+      _operation(await _api.requestQuietModeDisabled());
+
+  @override
+  Future<PickedWorkDocument?> pickWorkDocument() async {
+    try {
+      final value = await _api.pickWorkDocument();
+      if (value == null) return null;
+      return PickedWorkDocument(
+        uri: Uri.parse(value.uri),
+        displayName: value.displayName,
+        mimeType: value.mimeType,
+        canDelete: value.canDelete,
+        sizeBytes: value.sizeBytes?.toInt(),
+      );
+    } on PlatformException catch (error) {
+      throw WorkProfileOperationException(
+        _errorCodeFromPlatform(error.code),
+        message: error.message,
+      );
+    }
+  }
+
+  @override
+  Future<WorkProfileOperationResult> openStore(String packageName) async =>
+      _operation(await _api.openWorkStore(packageName));
 
   @override
   Future<WorkProfileOperationResult> clone(String packageName) async =>
@@ -145,7 +178,23 @@ class PigeonWorkProfileClient implements WorkProfileClient {
         hidden: value.hidden,
         cloneEligibility: _cloneEligibility(value.cloneEligibility),
         installerActionRequired: value.installerActionRequired,
+        iconBytes: value.iconBytes,
       );
+
+  WorkProfileErrorCode _errorCodeFromPlatform(String value) => switch (value) {
+    'UNSUPPORTED' => WorkProfileErrorCode.unsupported,
+    'POLICY_DENIED' => WorkProfileErrorCode.policyDenied,
+    'PROFILE_ABSENT' => WorkProfileErrorCode.profileAbsent,
+    'CONFLICTING_PROFILE' => WorkProfileErrorCode.conflictingProfile,
+    'USER_ACTION_REQUIRED' => WorkProfileErrorCode.userActionRequired,
+    'PACKAGE_INELIGIBLE' => WorkProfileErrorCode.packageIneligible,
+    'INSTALLER_FAILURE' => WorkProfileErrorCode.installerFailure,
+    'STORE_FALLBACK_REQUIRED' => WorkProfileErrorCode.storeFallbackRequired,
+    'BRIDGE_TIMEOUT' => WorkProfileErrorCode.bridgeTimeout,
+    'OEM_UNSUPPORTED' => WorkProfileErrorCode.oemUnsupported,
+    'UNAUTHORIZED' => WorkProfileErrorCode.unauthorized,
+    _ => WorkProfileErrorCode.oemUnsupported,
+  };
 
   WorkProfileErrorCode _errorCode(native.NativeWorkProfileErrorCode? value) =>
       switch (value) {
@@ -191,6 +240,17 @@ class UnavailableWorkProfileClient implements WorkProfileClient {
 
   @override
   Future<WorkProfileOperationResult> startProvisioning() async =>
+      _unsupported();
+
+  @override
+  Future<WorkProfileOperationResult> requestQuietModeDisabled() async =>
+      _unsupported();
+
+  @override
+  Future<PickedWorkDocument?> pickWorkDocument() async => null;
+
+  @override
+  Future<WorkProfileOperationResult> openStore(String packageName) async =>
       _unsupported();
 
   @override

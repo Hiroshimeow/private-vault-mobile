@@ -15,16 +15,20 @@ class CalculatorUnlockAttemptState {
 
   bool get biometricStarted =>
       phase == CalculatorUnlockAttemptPhase.authenticating;
+
+  bool get isTerminal =>
+      phase == CalculatorUnlockAttemptPhase.cancelled ||
+      phase == CalculatorUnlockAttemptPhase.completed;
 }
 
 class CalculatorUnlockAttemptController {
   int _nextId = 0;
   CalculatorUnlockAttemptState? _current;
 
-  CalculatorUnlockAttemptState begin() {
-    final previous = _current;
-    if (previous != null) {
-      previous.phase = CalculatorUnlockAttemptPhase.cancelled;
+  CalculatorUnlockAttemptState? tryBegin() {
+    final current = _current;
+    if (current != null && !current.isTerminal) {
+      return null;
     }
     final state = CalculatorUnlockAttemptState(++_nextId);
     _current = state;
@@ -32,9 +36,7 @@ class CalculatorUnlockAttemptController {
   }
 
   bool isCurrent(CalculatorUnlockAttemptState state) {
-    return identical(_current, state) &&
-        state.phase != CalculatorUnlockAttemptPhase.cancelled &&
-        state.phase != CalculatorUnlockAttemptPhase.completed;
+    return identical(_current, state) && !state.isTerminal;
   }
 
   bool beginBiometricCheck(CalculatorUnlockAttemptState state) {

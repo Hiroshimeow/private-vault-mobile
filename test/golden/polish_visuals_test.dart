@@ -221,6 +221,7 @@ void main() {
         child: PrivateVaultApp(
           lockController: LockController(),
           unlockService: _FakeUnlockService(),
+          initialCover: CoverKind.notes,
         ),
       ),
     );

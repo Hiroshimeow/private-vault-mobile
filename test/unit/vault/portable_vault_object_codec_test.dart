@@ -95,6 +95,33 @@ void main() {
     );
   });
 
+  test(
+    'stream cancellation completes MAC future with a format error',
+    () async {
+      final material = await deriver.derive('0000');
+      final payload = StreamController<List<int>>();
+      final encoded = codec.encodeStream(
+        fileName: 'cancelled.bin',
+        mediaType: 'application/octet-stream',
+        createdAtMillis: 1,
+        namespaceId: material.namespaceId,
+        payload: payload.stream,
+        key: material.encryptionKey,
+      );
+
+      final subscription = encoded.cipherText.listen((_) {});
+      await Future<void>.delayed(Duration.zero);
+      final cancellation = subscription.cancel();
+      await payload.close();
+      await cancellation;
+
+      await expectLater(
+        encoded.tag.timeout(const Duration(seconds: 1)),
+        throwsA(isA<PortableVaultFormatException>()),
+      );
+    },
+  );
+
   test('stream failure completes MAC future with a format error', () async {
     final material = await deriver.derive('0000');
     final payload = Stream<List<int>>.multi((controller) {

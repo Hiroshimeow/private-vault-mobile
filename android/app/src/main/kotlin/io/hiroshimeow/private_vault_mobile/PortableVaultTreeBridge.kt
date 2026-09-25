@@ -4,10 +4,11 @@ import android.app.Activity
 import android.content.Intent
 import android.net.Uri
 import android.os.ParcelFileDescriptor
-import androidx.documentfile.provider.DocumentFile
+import android.provider.DocumentsContract
 import io.flutter.plugin.common.BinaryMessenger
 import io.flutter.plugin.common.MethodChannel
 import java.io.FileOutputStream
+import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicLong
 
 class PortableVaultTreeBridge(
@@ -16,14 +17,21 @@ class PortableVaultTreeBridge(
 ) {
     private val channel = MethodChannel(messenger, CHANNEL_NAME)
     private var pendingPickResult: MethodChannel.Result? = null
-    private var disposed = false
+    @Volatile private var disposed = false
+    private val ioExecutor = Executors.newSingleThreadExecutor()
     private val nextWriteHandle = AtomicLong(1)
     private val pendingWrites = mutableMapOf<Long, PendingWrite>()
 
     private data class PendingWrite(
-        val temporary: DocumentFile,
+        val temporaryUri: Uri,
         val targetName: String,
         val stream: FileOutputStream,
+    )
+
+    private data class DocumentEntry(
+        val uri: Uri,
+        val name: String,
+        val mimeType: String,
     )
 
     init {
@@ -32,6 +40,8 @@ class PortableVaultTreeBridge(
                 "pickRoot" -> pickRoot(result)
                 "hasRoot" -> respond(result) { hasRootAccess() }
                 "list" -> respond(result) { list(call.argument<String>("path") ?: "") }
+                "listMetadata" -> respond(result) { listMetadata(call.argument<String>("path") ?: "") }
+                "metadata" -> respond(result) { metadata(call.argument<String>("path") ?: "") }
                 "read" -> respond(result) { read(call.argument<String>("path") ?: "") }
                 "write" -> {
                     val path = call.argument<String>("path") ?: ""
@@ -140,13 +150,20 @@ class PortableVaultTreeBridge(
         .getString(KEY_ROOT_URI, null)
         ?.let(Uri::parse)
 
-    private fun root(): DocumentFile? = loadRootUri()?.let { uri ->
-        DocumentFile.fromTreeUri(activity, uri)
+    private fun rootUri(): Uri? {
+        val treeUri = loadRootUri() ?: return null
+        val rootId = DocumentsContract.getTreeDocumentId(treeUri)
+        return DocumentsContract.buildDocumentUriUsingTree(treeUri, rootId)
     }
 
     private fun hasRootAccess(): Boolean {
-        val root = root() ?: return false
-        return root.exists() && root.isDirectory && root.canRead() && root.canWrite()
+        val root = rootUri() ?: return false
+        val entry = queryDocument(root) ?: return false
+        if (entry.mimeType != DocumentsContract.Document.MIME_TYPE_DIR) return false
+        val permission = activity.contentResolver.persistedUriPermissions
+            .firstOrNull { it.uri == loadRootUri() }
+            ?: return false
+        return permission.isReadPermission && permission.isWritePermission
     }
 
     private fun pathSegments(path: String): List<String> {
@@ -157,38 +174,249 @@ class PortableVaultTreeBridge(
         return segments
     }
 
-    private fun resolve(path: String): DocumentFile? {
-        var current = root() ?: return null
+    private fun queryDocument(uri: Uri): DocumentEntry? {
+        val projection = arrayOf(
+            DocumentsContract.Document.COLUMN_DISPLAY_NAME,
+            DocumentsContract.Document.COLUMN_MIME_TYPE,
+        )
+        activity.contentResolver.query(uri, projection, null, null, null)?.use { cursor ->
+            if (!cursor.moveToFirst()) return null
+            val nameIndex = cursor.getColumnIndexOrThrow(
+                DocumentsContract.Document.COLUMN_DISPLAY_NAME,
+            )
+            val mimeIndex = cursor.getColumnIndexOrThrow(
+                DocumentsContract.Document.COLUMN_MIME_TYPE,
+            )
+            val name = cursor.getString(nameIndex) ?: return null
+            val mimeType = cursor.getString(mimeIndex) ?: return null
+            return DocumentEntry(uri = uri, name = name, mimeType = mimeType)
+        }
+        return null
+    }
+
+    private fun findChild(parentUri: Uri, displayName: String): DocumentEntry? {
+        val parentId = DocumentsContract.getDocumentId(parentUri)
+        val childrenUri = DocumentsContract.buildChildDocumentsUriUsingTree(
+            parentUri,
+            parentId,
+        )
+        val projection = arrayOf(
+            DocumentsContract.Document.COLUMN_DOCUMENT_ID,
+            DocumentsContract.Document.COLUMN_DISPLAY_NAME,
+            DocumentsContract.Document.COLUMN_MIME_TYPE,
+        )
+        activity.contentResolver.query(childrenUri, projection, null, null, null)?.use { cursor ->
+            val idIndex = cursor.getColumnIndexOrThrow(
+                DocumentsContract.Document.COLUMN_DOCUMENT_ID,
+            )
+            val nameIndex = cursor.getColumnIndexOrThrow(
+                DocumentsContract.Document.COLUMN_DISPLAY_NAME,
+            )
+            val mimeIndex = cursor.getColumnIndexOrThrow(
+                DocumentsContract.Document.COLUMN_MIME_TYPE,
+            )
+            while (cursor.moveToNext()) {
+                val name = cursor.getString(nameIndex) ?: continue
+                if (name != displayName) continue
+                val documentId = cursor.getString(idIndex) ?: continue
+                val mimeType = cursor.getString(mimeIndex) ?: continue
+                return DocumentEntry(
+                    uri = DocumentsContract.buildDocumentUriUsingTree(
+                        parentUri,
+                        documentId,
+                    ),
+                    name = name,
+                    mimeType = mimeType,
+                )
+            }
+        } ?: throw IllegalStateException("Portable Vault directory could not be queried")
+        return null
+    }
+
+    private fun resolve(path: String): DocumentEntry? {
+        val root = rootUri() ?: return null
+        var current = DocumentEntry(
+            uri = root,
+            name = "",
+            mimeType = DocumentsContract.Document.MIME_TYPE_DIR,
+        )
         for (segment in pathSegments(path)) {
-            current = current.findFile(segment) ?: return null
+            if (current.mimeType != DocumentsContract.Document.MIME_TYPE_DIR) return null
+            current = findChild(current.uri, segment) ?: return null
         }
         return current
     }
 
-    private fun parentAndName(path: String): Pair<DocumentFile, String>? {
+    private fun createDirectory(parentUri: Uri, name: String): DocumentEntry? {
+        val created = DocumentsContract.createDocument(
+            activity.contentResolver,
+            parentUri,
+            DocumentsContract.Document.MIME_TYPE_DIR,
+            name,
+        ) ?: return null
+        val exact = ensureExactDisplayName(created, name)
+        return DocumentEntry(
+            uri = exact,
+            name = name,
+            mimeType = DocumentsContract.Document.MIME_TYPE_DIR,
+        )
+    }
+
+    private fun parentAndName(path: String): Pair<Uri, String>? {
         val segments = pathSegments(path)
         if (segments.isEmpty()) return null
-        var current = root() ?: return null
+        var current = rootUri() ?: return null
         for (segment in segments.dropLast(1)) {
-            current = current.findFile(segment)
-                ?: current.createDirectory(segment)
-                    ?.let { ensureExactDisplayName(it, segment) }
-                ?: return null
-            if (!current.isDirectory) return null
+            val existing = findChild(current, segment)
+            val next = existing ?: createDirectory(current, segment) ?: return null
+            if (next.mimeType != DocumentsContract.Document.MIME_TYPE_DIR) return null
+            current = next.uri
         }
         return current to segments.last()
     }
 
-    private fun list(path: String): List<String> {
-        val dir = (if (path.isBlank()) root() else resolve(path))
-            ?: throw IllegalStateException("Portable Vault root unavailable")
-        if (!dir.isDirectory) throw IllegalStateException("Portable Vault path is not a directory")
-        return dir.listFiles().mapNotNull { it.name }
+    private fun list(path: String): List<String> =
+        queryChildren(path, includeMetadata = false)
+            .map { it["name"] as String }
+
+    private fun listMetadata(path: String): List<Map<String, Any>> =
+        queryChildren(path, includeMetadata = true)
+
+    private fun queryChildren(
+        path: String,
+        includeMetadata: Boolean,
+    ): List<Map<String, Any>> {
+        val dir = if (path.isBlank()) {
+            val root = rootUri()
+                ?: throw IllegalStateException("Portable Vault root unavailable")
+            DocumentEntry(
+                uri = root,
+                name = "",
+                mimeType = DocumentsContract.Document.MIME_TYPE_DIR,
+            )
+        } else {
+            resolve(path)
+                ?: throw IllegalStateException("Portable Vault root unavailable")
+        }
+        if (dir.mimeType != DocumentsContract.Document.MIME_TYPE_DIR) {
+            throw IllegalStateException("Portable Vault path is not a directory")
+        }
+        val documentId = DocumentsContract.getDocumentId(dir.uri)
+        val childrenUri = DocumentsContract.buildChildDocumentsUriUsingTree(
+            dir.uri,
+            documentId,
+        )
+        val projection = if (includeMetadata) {
+            arrayOf(
+                DocumentsContract.Document.COLUMN_DOCUMENT_ID,
+                DocumentsContract.Document.COLUMN_DISPLAY_NAME,
+                DocumentsContract.Document.COLUMN_SIZE,
+                DocumentsContract.Document.COLUMN_LAST_MODIFIED,
+                DocumentsContract.Document.COLUMN_MIME_TYPE,
+            )
+        } else {
+            arrayOf(
+                DocumentsContract.Document.COLUMN_DOCUMENT_ID,
+                DocumentsContract.Document.COLUMN_DISPLAY_NAME,
+                DocumentsContract.Document.COLUMN_MIME_TYPE,
+            )
+        }
+        val entries = mutableListOf<Map<String, Any>>()
+        activity.contentResolver.query(childrenUri, projection, null, null, null)?.use { cursor ->
+            val nameIndex = cursor.getColumnIndexOrThrow(
+                DocumentsContract.Document.COLUMN_DISPLAY_NAME,
+            )
+            val mimeIndex = cursor.getColumnIndexOrThrow(
+                DocumentsContract.Document.COLUMN_MIME_TYPE,
+            )
+            val sizeIndex = if (includeMetadata) {
+                cursor.getColumnIndex(DocumentsContract.Document.COLUMN_SIZE)
+            } else {
+                -1
+            }
+            val modifiedIndex = if (includeMetadata) {
+                cursor.getColumnIndex(DocumentsContract.Document.COLUMN_LAST_MODIFIED)
+            } else {
+                -1
+            }
+            while (cursor.moveToNext()) {
+                if (cursor.getString(mimeIndex) == DocumentsContract.Document.MIME_TYPE_DIR) {
+                    continue
+                }
+                val name = cursor.getString(nameIndex) ?: continue
+                if (includeMetadata) {
+                    entries += mapOf(
+                        "name" to name,
+                        "sizeBytes" to if (sizeIndex < 0 || cursor.isNull(sizeIndex)) {
+                            -1L
+                        } else {
+                            cursor.getLong(sizeIndex)
+                        },
+                        "modifiedAtMillis" to if (
+                            modifiedIndex < 0 || cursor.isNull(modifiedIndex)
+                        ) {
+                            0L
+                        } else {
+                            cursor.getLong(modifiedIndex)
+                        },
+                    )
+                } else {
+                    entries += mapOf("name" to name)
+                }
+            }
+        } ?: throw IllegalStateException("Portable Vault directory could not be queried")
+        return entries
+    }
+
+    private fun metadata(path: String): Map<String, Any>? {
+        val file = resolve(path) ?: return null
+        if (file.mimeType == DocumentsContract.Document.MIME_TYPE_DIR) return null
+        val projection = arrayOf(
+            DocumentsContract.Document.COLUMN_DISPLAY_NAME,
+            DocumentsContract.Document.COLUMN_SIZE,
+            DocumentsContract.Document.COLUMN_LAST_MODIFIED,
+            DocumentsContract.Document.COLUMN_MIME_TYPE,
+        )
+        activity.contentResolver.query(file.uri, projection, null, null, null)?.use { cursor ->
+            if (!cursor.moveToFirst()) return null
+            val mimeIndex = cursor.getColumnIndexOrThrow(
+                DocumentsContract.Document.COLUMN_MIME_TYPE,
+            )
+            if (cursor.getString(mimeIndex) == DocumentsContract.Document.MIME_TYPE_DIR) {
+                return null
+            }
+            val nameIndex = cursor.getColumnIndexOrThrow(
+                DocumentsContract.Document.COLUMN_DISPLAY_NAME,
+            )
+            val sizeIndex = cursor.getColumnIndex(
+                DocumentsContract.Document.COLUMN_SIZE,
+            )
+            val modifiedIndex = cursor.getColumnIndex(
+                DocumentsContract.Document.COLUMN_LAST_MODIFIED,
+            )
+            val name = cursor.getString(nameIndex) ?: return null
+            return mapOf(
+                "name" to name,
+                "sizeBytes" to if (sizeIndex < 0 || cursor.isNull(sizeIndex)) {
+                    -1L
+                } else {
+                    cursor.getLong(sizeIndex)
+                },
+                "modifiedAtMillis" to if (
+                    modifiedIndex < 0 || cursor.isNull(modifiedIndex)
+                ) {
+                    0L
+                } else {
+                    cursor.getLong(modifiedIndex)
+                },
+            )
+        }
+        return null
     }
 
     private fun read(path: String): ByteArray? {
         val file = resolve(path) ?: return null
-        if (!file.isFile) return null
+        if (file.mimeType == DocumentsContract.Document.MIME_TYPE_DIR) return null
         return activity.contentResolver.openInputStream(file.uri)?.use { it.readBytes() }
             ?: throw IllegalStateException("Portable Vault object could not be opened")
     }
@@ -196,17 +424,22 @@ class PortableVaultTreeBridge(
     private fun write(path: String, bytes: ByteArray): Boolean {
         val (parent, name) = parentAndName(path)
             ?: throw IllegalStateException("Portable Vault root unavailable")
-        val existing = parent.findFile(name)
-        if (existing != null && !existing.isFile) {
+        val existing = findChild(parent, name)
+        if (existing != null &&
+            existing.mimeType == DocumentsContract.Document.MIME_TYPE_DIR
+        ) {
             throw IllegalStateException("Portable Vault object path is not a file")
         }
-        val file = existing
-            ?: ensureExactDisplayName(
-                parent.createFile("application/octet-stream", name)
-                    ?: throw IllegalStateException("Portable Vault object could not be created"),
+        val fileUri = existing?.uri ?: ensureExactDisplayName(
+            DocumentsContract.createDocument(
+                activity.contentResolver,
+                parent,
+                "application/octet-stream",
                 name,
-            )
-        activity.contentResolver.openOutputStream(file.uri, "wt")?.use { stream ->
+            ) ?: throw IllegalStateException("Portable Vault object could not be created"),
+            name,
+        )
+        activity.contentResolver.openOutputStream(fileUri, "wt")?.use { stream ->
             stream.write(bytes)
             stream.flush()
         } ?: throw IllegalStateException("Portable Vault object could not be opened for write")
@@ -216,27 +449,31 @@ class PortableVaultTreeBridge(
     private fun beginWrite(path: String): Long {
         val (parent, targetName) = parentAndName(path)
             ?: throw IllegalStateException("Portable Vault root unavailable")
-        if (parent.findFile(targetName) != null) {
+        if (findChild(parent, targetName) != null) {
             throw IllegalStateException("Portable Vault object already exists")
         }
 
         val temporaryName =
             ".${targetName}.partial-${System.currentTimeMillis()}-${System.nanoTime()}"
-        val temporary = ensureExactDisplayName(
-            parent.createFile("application/octet-stream", temporaryName)
-                ?: throw IllegalStateException("Portable Vault temporary object could not be created"),
+        val temporaryUri = ensureExactDisplayName(
+            DocumentsContract.createDocument(
+                activity.contentResolver,
+                parent,
+                "application/octet-stream",
+                temporaryName,
+            ) ?: throw IllegalStateException("Portable Vault temporary object could not be created"),
             temporaryName,
         )
-        val descriptor = activity.contentResolver.openFileDescriptor(temporary.uri, "rw")
+        val descriptor = activity.contentResolver.openFileDescriptor(temporaryUri, "rw")
         if (descriptor == null) {
-            temporary.delete()
+            DocumentsContract.deleteDocument(activity.contentResolver, temporaryUri)
             throw IllegalStateException("Portable Vault temporary object could not be opened")
         }
 
         val stream = ParcelFileDescriptor.AutoCloseOutputStream(descriptor)
         val handle = nextWriteHandle.getAndIncrement()
         pendingWrites[handle] = PendingWrite(
-            temporary = temporary,
+            temporaryUri = temporaryUri,
             targetName = targetName,
             stream = stream,
         )
@@ -274,15 +511,23 @@ class PortableVaultTreeBridge(
             pending.stream.flush()
             pending.stream.fd.sync()
             pending.stream.close()
-            if (!pending.temporary.renameTo(pending.targetName)) {
-                pending.temporary.delete()
-                throw IllegalStateException("Portable Vault object commit failed")
-            }
-            ensureExactDisplayName(pending.temporary, pending.targetName)
+            val renamed = DocumentsContract.renameDocument(
+                activity.contentResolver,
+                pending.temporaryUri,
+                pending.targetName,
+            ) ?: throw IllegalStateException("Portable Vault object commit failed")
+            ensureExactDisplayName(renamed, pending.targetName)
             return true
         } catch (error: Exception) {
             closeQuietly(pending.stream)
-            pending.temporary.delete()
+            try {
+                DocumentsContract.deleteDocument(
+                    activity.contentResolver,
+                    pending.temporaryUri,
+                )
+            } catch (_: Exception) {
+                // Preserve the original commit failure.
+            }
             throw error
         }
     }
@@ -290,17 +535,30 @@ class PortableVaultTreeBridge(
     private fun abortWrite(handle: Long): Boolean {
         val pending = pendingWrites.remove(handle) ?: return true
         closeQuietly(pending.stream)
-        pending.temporary.delete()
+        DocumentsContract.deleteDocument(activity.contentResolver, pending.temporaryUri)
         return true
     }
 
     private fun ensureExactDisplayName(
-        file: DocumentFile,
+        uri: Uri,
         expectedName: String,
-    ): DocumentFile {
-        if (file.name == expectedName) return file
-        if (file.renameTo(expectedName) && file.name == expectedName) return file
-        file.delete()
+    ): Uri {
+        val current = queryDocument(uri)
+        if (current?.name == expectedName) return uri
+        val renamed = DocumentsContract.renameDocument(
+            activity.contentResolver,
+            uri,
+            expectedName,
+        )
+        if (renamed != null && queryDocument(renamed)?.name == expectedName) {
+            return renamed
+        }
+        val unsafe = renamed ?: uri
+        try {
+            DocumentsContract.deleteDocument(activity.contentResolver, unsafe)
+        } catch (_: Exception) {
+            // Preserve the original unsafe-name failure.
+        }
         throw IllegalStateException(
             "Portable Vault provider changed object name; refusing unsafe commit",
         )
@@ -319,11 +577,21 @@ class PortableVaultTreeBridge(
         disposed = true
         channel.setMethodCallHandler(null)
 
-        val writes = pendingWrites.values.toList()
-        pendingWrites.clear()
-        for (pending in writes) {
-            closeQuietly(pending.stream)
-            pending.temporary.delete()
+        ioExecutor.execute {
+            val writes = pendingWrites.values.toList()
+            pendingWrites.clear()
+            for (pending in writes) {
+                closeQuietly(pending.stream)
+                try {
+                    DocumentsContract.deleteDocument(
+                        activity.contentResolver,
+                        pending.temporaryUri,
+                    )
+                } catch (_: Exception) {
+                    // Best effort teardown cleanup.
+                }
+            }
+            ioExecutor.shutdown()
         }
 
         val pickResult = pendingPickResult
@@ -343,18 +611,21 @@ class PortableVaultTreeBridge(
 
     private fun delete(path: String): Boolean {
         val file = resolve(path) ?: return true
-        return file.delete()
+        return DocumentsContract.deleteDocument(activity.contentResolver, file.uri)
     }
 
     private fun <T> respond(result: MethodChannel.Result, block: () -> T) {
-        try {
-            result.success(block())
-        } catch (error: SecurityException) {
-            result.error("permission_denied", error.message, null)
-        } catch (error: IllegalArgumentException) {
-            result.error("invalid_path", error.message, null)
-        } catch (error: Exception) {
-            result.error("storage_error", error.message, null)
+        ioExecutor.execute {
+            try {
+                val value = block()
+                activity.runOnUiThread { if (!disposed) result.success(value) }
+            } catch (error: SecurityException) {
+                activity.runOnUiThread { if (!disposed) result.error("permission_denied", error.message, null) }
+            } catch (error: IllegalArgumentException) {
+                activity.runOnUiThread { if (!disposed) result.error("invalid_path", error.message, null) }
+            } catch (error: Exception) {
+                activity.runOnUiThread { if (!disposed) result.error("storage_error", error.message, null) }
+            }
         }
     }
 

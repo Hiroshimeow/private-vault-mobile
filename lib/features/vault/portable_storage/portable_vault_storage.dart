@@ -7,12 +7,36 @@ abstract interface class PortableVaultRootAccess {
   Future<bool> pickRoot();
 }
 
+class PortableVaultStorageEntryMetadata {
+  const PortableVaultStorageEntryMetadata({
+    required this.name,
+    required this.sizeBytes,
+    required this.modifiedAtMillis,
+  });
+
+  final String name;
+  final int sizeBytes;
+  final int modifiedAtMillis;
+
+  bool get hasSizeFingerprint => sizeBytes >= 0;
+
+  bool get hasReliableModificationTime => modifiedAtMillis > 0;
+}
+
 abstract interface class PortableVaultStorage {
   Future<bool> hasAccess();
   Future<List<String>> list(String path);
   Future<Uint8List> read(String path);
   Future<void> write(String path, Uint8List bytes);
   Future<void> delete(String path);
+}
+
+abstract interface class PortableVaultMetadataStorage {
+  Future<List<PortableVaultStorageEntryMetadata>> listMetadata(String path);
+}
+
+abstract interface class PortableVaultEntryMetadataStorage {
+  Future<PortableVaultStorageEntryMetadata?> metadata(String path);
 }
 
 abstract interface class PortableVaultWriteSession {
@@ -29,7 +53,11 @@ abstract interface class PortableVaultStreamingStorage
 
 typedef PortableVaultRootDirectory = Future<Directory> Function();
 
-class DirectoryPortableVaultStorage implements PortableVaultStreamingStorage {
+class DirectoryPortableVaultStorage
+    implements
+        PortableVaultStreamingStorage,
+        PortableVaultMetadataStorage,
+        PortableVaultEntryMetadataStorage {
   DirectoryPortableVaultStorage(this.rootDirectory);
 
   final PortableVaultRootDirectory rootDirectory;
@@ -46,15 +74,45 @@ class DirectoryPortableVaultStorage implements PortableVaultStreamingStorage {
   }
 
   @override
-  Future<List<String>> list(String path) async {
+  Future<List<String>> list(String path) async =>
+      (await listMetadata(path)).map((entry) => entry.name).toList();
+
+  @override
+  Future<List<PortableVaultStorageEntryMetadata>> listMetadata(
+    String path,
+  ) async {
     try {
       final directory = await _directory(path);
       if (!await directory.exists()) return const [];
-      return await directory
-          .list()
-          .where((entity) => entity is File)
-          .map((entity) => entity.path.split(Platform.pathSeparator).last)
-          .toList();
+      final entries = <PortableVaultStorageEntryMetadata>[];
+      await for (final entity in directory.list()) {
+        if (entity is! File) continue;
+        final stat = await entity.stat();
+        entries.add(
+          PortableVaultStorageEntryMetadata(
+            name: entity.path.split(Platform.pathSeparator).last,
+            sizeBytes: stat.size,
+            modifiedAtMillis: stat.modified.millisecondsSinceEpoch,
+          ),
+        );
+      }
+      return entries;
+    } on FileSystemException catch (error) {
+      throw PortableVaultStorageException(error.message);
+    }
+  }
+
+  @override
+  Future<PortableVaultStorageEntryMetadata?> metadata(String path) async {
+    try {
+      final file = await _file(path);
+      if (!await file.exists()) return null;
+      final stat = await file.stat();
+      return PortableVaultStorageEntryMetadata(
+        name: file.path.split(Platform.pathSeparator).last,
+        sizeBytes: stat.size,
+        modifiedAtMillis: stat.modified.millisecondsSinceEpoch,
+      );
     } on FileSystemException catch (error) {
       throw PortableVaultStorageException(error.message);
     }

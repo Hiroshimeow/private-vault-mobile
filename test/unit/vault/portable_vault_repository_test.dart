@@ -3,8 +3,8 @@ import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
-import 'package:private_vault_mobile/core/crypto/vault_crypto.dart';
 import 'package:private_vault_mobile/features/vault/crypto_v2/portable_vault_key_deriver.dart';
+import 'package:private_vault_mobile/features/vault/crypto_v2/portable_vault_object_codec.dart';
 import 'package:private_vault_mobile/features/vault/portable_storage/portable_vault_repository.dart';
 import 'package:private_vault_mobile/features/vault/portable_storage/portable_vault_session.dart';
 import 'package:private_vault_mobile/features/vault/portable_storage/portable_vault_storage.dart';
@@ -30,32 +30,92 @@ void main() {
     );
   }
 
-  test('same PIN reopens persistent objects', () async {
-    final first = await repository('0000');
-    final added = await first.addBytes(
-      Uint8List.fromList([1, 2, 3, 4]),
+  File objectFile(PortableVaultRepository repo, String id, String extension) {
+    final material = repo.session.requireMaterial();
+    return File(
+      '${root.path}${Platform.pathSeparator}${material.namespaceId}'
+      '${Platform.pathSeparator}objects${Platform.pathSeparator}$id$extension',
+    );
+  }
+
+  File thumbnailFile(PortableVaultRepository repo, String id) {
+    final material = repo.session.requireMaterial();
+    return File(
+      '${root.path}${Platform.pathSeparator}${material.namespaceId}'
+      '${Platform.pathSeparator}cache${Platform.pathSeparator}thumbnails'
+      '${Platform.pathSeparator}$id.pvt',
+    );
+  }
+
+  test(
+    'same PIN reopens authoritative payload without metadata sidecar',
+    () async {
+      final first = await repository('0000');
+      final added = await first.addBytes(
+        Uint8List.fromList([1, 2, 3, 4]),
+        kind: VaultItemKind.image,
+      );
+
+      final reopened = await repository('0000');
+      final listed = await reopened.list();
+
+      expect(listed.map((item) => item.id), contains(added.id));
+      expect(
+        await reopened.readBytes(added.id),
+        Uint8List.fromList([1, 2, 3, 4]),
+      );
+      expect(await objectFile(reopened, added.id, '.pvm').exists(), isFalse);
+    },
+  );
+
+  test('unchanged catalog listing does not reread payload bytes', () async {
+    final session = PortableVaultSession();
+    await session.open('0000');
+    final delegate = DirectoryPortableVaultStorage(() async => root);
+    final storage = _RecordingPortableVaultStorage(delegate);
+    final repo = PortableVaultRepository(storage: storage, session: session);
+    final added = await repo.addBytes(
+      Uint8List.fromList([1, 2, 3, 4, 5]),
       kind: VaultItemKind.image,
     );
 
-    final reopened = await repository('0000');
-    final listed = await reopened.list();
+    storage.reads.clear();
+    final first = await repo.scan();
 
-    expect(listed.map((item) => item.id), contains(added.id));
-    expect(
-      await reopened.readBytes(added.id),
-      Uint8List.fromList([1, 2, 3, 4]),
-    );
-    final material = reopened.session.requireMaterial();
-    expect(
-      File(
-        '${root.path}${Platform.pathSeparator}${material.namespaceId}'
-        '${Platform.pathSeparator}objects${Platform.pathSeparator}'
-        '${added.id}.pvm',
-      ).existsSync(),
-      isTrue,
-    );
+    expect(first.items.map((item) => item.id), contains(added.id));
+    expect(storage.reads.where((path) => path.endsWith('.pvb')), isEmpty);
+
+    final payload = objectFile(repo, added.id, '.pvb');
+    final bytes = await payload.readAsBytes();
+    bytes[bytes.length - 1] ^= 1;
+    await Future<void>.delayed(const Duration(milliseconds: 2));
+    await payload.writeAsBytes(bytes, flush: true);
+
+    storage.reads.clear();
+    final changed = await repo.scan();
+    expect(changed.corruptCount, 1);
+    expect(storage.reads.where((path) => path.endsWith('.pvb')), isNotEmpty);
   });
+  test('SAF-style zero mtime still avoids unchanged payload rereads', () async {
+    final session = PortableVaultSession();
+    await session.open('0000');
+    final storage = _RecordingPortableVaultStorage(
+      DirectoryPortableVaultStorage(() async => root),
+      suppressModifiedAt: true,
+    );
+    final repo = PortableVaultRepository(storage: storage, session: session);
+    final added = await repo.addBytes(
+      Uint8List.fromList([6, 7, 8, 9]),
+      kind: VaultItemKind.image,
+    );
 
+    storage.reads.clear();
+    final scan = await repo.scan();
+
+    expect(scan.items.map((item) => item.id), contains(added.id));
+    expect(storage.reads.where((path) => path.endsWith('.pvb')), isEmpty);
+    expect(await repo.readBytes(added.id), Uint8List.fromList([6, 7, 8, 9]));
+  });
   test(
     'different PIN sees independent namespace and switching back restores it',
     () async {
@@ -125,7 +185,6 @@ void main() {
 
   test('failed stream import aborts partial object', () async {
     final repo = await repository('0000');
-
     Stream<List<int>> broken() async* {
       yield [1, 2, 3];
       throw StateError('source failed');
@@ -144,55 +203,14 @@ void main() {
   });
 
   test(
-    'listing uses encrypted sidecar without decrypting large payload',
+    'corrupt authoritative payload is surfaced and list fails closed',
     () async {
       final repo = await repository('0000');
       final added = await repo.addBytes(
         Uint8List.fromList([1, 2, 3]),
         kind: VaultItemKind.image,
       );
-      final material = repo.session.requireMaterial();
-      final objects = Directory(
-        '${root.path}${Platform.pathSeparator}${material.namespaceId}'
-        '${Platform.pathSeparator}objects',
-      );
-      final payload = File(
-        '${objects.path}${Platform.pathSeparator}${added.id}.pvb',
-      );
-      final bytes = await payload.readAsBytes();
-      bytes[bytes.length - 1] ^= 1;
-      await payload.writeAsBytes(bytes, flush: true);
-
-      final scan = await repo.scan();
-      expect(scan.items.map((item) => item.id), contains(added.id));
-      expect(scan.corruptCount, 0);
-      await expectLater(
-        repo.readBytes(added.id),
-        throwsA(isA<VaultIntegrityException>()),
-      );
-    },
-  );
-
-  test(
-    'corrupt payload without sidecar is surfaced and list fails closed',
-    () async {
-      final repo = await repository('0000');
-      final added = await repo.addBytes(
-        Uint8List.fromList([1, 2, 3]),
-        kind: VaultItemKind.image,
-      );
-      final material = repo.session.requireMaterial();
-      final objects = Directory(
-        '${root.path}${Platform.pathSeparator}${material.namespaceId}'
-        '${Platform.pathSeparator}objects',
-      );
-      final payload = File(
-        '${objects.path}${Platform.pathSeparator}${added.id}.pvb',
-      );
-      final metadata = File(
-        '${objects.path}${Platform.pathSeparator}${added.id}.pvm',
-      );
-      await metadata.delete();
+      final payload = objectFile(repo, added.id, '.pvb');
       final bytes = await payload.readAsBytes();
       bytes[bytes.length - 1] ^= 1;
       await payload.writeAsBytes(bytes, flush: true);
@@ -204,33 +222,35 @@ void main() {
     },
   );
 
+  test('legacy encrypted metadata sidecar remains readable beside authoritative payload', () async {
+    final repo = await repository('0000');
+    final added = await repo.addBytes(
+      Uint8List.fromList([4, 5, 6]),
+      kind: VaultItemKind.document,
+    );
+    final material = repo.session.requireMaterial();
+    final codec = PortableVaultObjectCodec();
+    final metadata = await codec.encode(
+      PortableVaultObject(
+        fileName: '${added.id}.meta',
+        mediaType: 'application/octet-stream',
+        createdAtMillis: added.createdAt.millisecondsSinceEpoch,
+        namespaceId: material.namespaceId,
+        bytes: Uint8List(0),
+      ),
+      material.encryptionKey,
+    );
+    final sidecar = objectFile(repo, added.id, '.pvm');
+    await sidecar.writeAsBytes(metadata, flush: true);
+
+    final scan = await repo.scan();
+    expect(scan.items.map((item) => item.id), contains(added.id));
+    expect(scan.corruptCount, 0);
+    expect(await sidecar.exists(), isTrue);
+  });
+
   test(
-    'legacy payload without sidecar is reopened and sidecar is rebuilt',
-    () async {
-      final repo = await repository('0000');
-      final added = await repo.addBytes(
-        Uint8List.fromList([4, 5, 6]),
-        kind: VaultItemKind.document,
-      );
-      final material = repo.session.requireMaterial();
-      final metadata = File(
-        '${root.path}${Platform.pathSeparator}${material.namespaceId}'
-        '${Platform.pathSeparator}objects${Platform.pathSeparator}'
-        '${added.id}.pvm',
-      );
-      await metadata.delete();
-      expect(await metadata.exists(), isFalse);
-
-      final scan = await repo.scan();
-
-      expect(scan.items.map((item) => item.id), contains(added.id));
-      expect(scan.hasProblems, isFalse);
-      expect(await metadata.exists(), isTrue);
-    },
-  );
-
-  test(
-    'encrypted thumbnail cache round trips without touching payload',
+    'new thumbnail cache is encrypted and separated from payload objects',
     () async {
       final repo = await repository('0000');
       final added = await repo.addBytes(
@@ -249,78 +269,105 @@ void main() {
 
       await repo.writeThumbnail(added.id, thumbnailBytes);
 
+      final thumbnail = thumbnailFile(repo, added.id);
       expect(await repo.readThumbnail(added.id), thumbnailBytes);
-      final material = repo.session.requireMaterial();
-      final thumbnail = File(
-        '${root.path}${Platform.pathSeparator}${material.namespaceId}'
-        '${Platform.pathSeparator}objects${Platform.pathSeparator}'
-        '${added.id}.pvt',
-      );
       expect(await thumbnail.exists(), isTrue);
       expect(await thumbnail.readAsBytes(), isNot(contains(thumbnailBytes)));
+      expect(await objectFile(repo, added.id, '.pvt').exists(), isFalse);
       expect(await repo.readBytes(added.id), Uint8List.fromList([10, 20, 30]));
     },
   );
 
-  test('corrupt thumbnail is discarded as cache miss', () async {
+  test('legacy thumbnail cache remains readable', () async {
     final repo = await repository('0000');
     final added = await repo.addBytes(
-      Uint8List.fromList([5, 6, 7]),
+      Uint8List.fromList([8, 8]),
       kind: VaultItemKind.image,
     );
-    await repo.writeThumbnail(
-      added.id,
-      Uint8List.fromList([0xff, 0xd8, 9, 8, 7, 0xff, 0xd9]),
-    );
-    final material = repo.session.requireMaterial();
-    final thumbnail = File(
-      '${root.path}${Platform.pathSeparator}${material.namespaceId}'
-      '${Platform.pathSeparator}objects${Platform.pathSeparator}'
-      '${added.id}.pvt',
-    );
-    final bytes = await thumbnail.readAsBytes();
-    bytes[bytes.length - 1] ^= 1;
-    await thumbnail.writeAsBytes(bytes, flush: true);
+    final expected = Uint8List.fromList([0xff, 0xd8, 8, 0xff, 0xd9]);
+    await repo.writeThumbnail(added.id, expected);
+    final modern = thumbnailFile(repo, added.id);
+    final legacy = objectFile(repo, added.id, '.pvt');
+    await legacy.parent.create(recursive: true);
+    await modern.rename(legacy.path);
 
-    expect(await repo.readThumbnail(added.id), isNull);
-    expect(await thumbnail.exists(), isFalse);
-    expect(await repo.readBytes(added.id), Uint8List.fromList([5, 6, 7]));
+    expect(await repo.readThumbnail(added.id), expected);
   });
 
-  test('delete removes payload, metadata, and thumbnail cache', () async {
-    final repo = await repository('0000');
-    final added = await repo.addBytes(
-      Uint8List.fromList([7]),
-      kind: VaultItemKind.image,
-    );
-    await repo.writeThumbnail(
-      added.id,
-      Uint8List.fromList([0xff, 0xd8, 7, 0xff, 0xd9]),
-    );
-    final material = repo.session.requireMaterial();
-    final objects = Directory(
-      '${root.path}${Platform.pathSeparator}${material.namespaceId}'
-      '${Platform.pathSeparator}objects',
-    );
-    final payload = File(
-      '${objects.path}${Platform.pathSeparator}${added.id}.pvb',
-    );
-    final metadata = File(
-      '${objects.path}${Platform.pathSeparator}${added.id}.pvm',
-    );
-    final thumbnail = File(
-      '${objects.path}${Platform.pathSeparator}${added.id}.pvt',
-    );
-    expect(await payload.exists(), isTrue);
-    expect(await metadata.exists(), isTrue);
-    expect(await thumbnail.exists(), isTrue);
+  test(
+    'corrupt thumbnail is discarded as cache miss without touching payload',
+    () async {
+      final repo = await repository('0000');
+      final added = await repo.addBytes(
+        Uint8List.fromList([5, 6, 7]),
+        kind: VaultItemKind.image,
+      );
+      await repo.writeThumbnail(
+        added.id,
+        Uint8List.fromList([0xff, 0xd8, 9, 8, 7, 0xff, 0xd9]),
+      );
+      final thumbnail = thumbnailFile(repo, added.id);
+      final bytes = await thumbnail.readAsBytes();
+      bytes[bytes.length - 1] ^= 1;
+      await thumbnail.writeAsBytes(bytes, flush: true);
 
-    await repo.delete(added.id);
+      expect(await repo.readThumbnail(added.id), isNull);
+      expect(await thumbnail.exists(), isFalse);
+      expect(await repo.readBytes(added.id), Uint8List.fromList([5, 6, 7]));
+    },
+  );
 
-    expect(await payload.exists(), isFalse);
-    expect(await metadata.exists(), isFalse);
-    expect(await thumbnail.exists(), isFalse);
-  });
+  test(
+    'delete removes payload plus modern and legacy auxiliary caches',
+    () async {
+      final repo = await repository('0000');
+      final added = await repo.addBytes(
+        Uint8List.fromList([7]),
+        kind: VaultItemKind.image,
+      );
+      await repo.writeThumbnail(
+        added.id,
+        Uint8List.fromList([0xff, 0xd8, 7, 0xff, 0xd9]),
+      );
+      final legacyMetadata = objectFile(repo, added.id, '.pvm');
+      final legacyThumbnail = objectFile(repo, added.id, '.pvt');
+      await legacyMetadata.writeAsBytes([1], flush: true);
+      await legacyThumbnail.writeAsBytes([2], flush: true);
+      final modernThumbnail = thumbnailFile(repo, added.id);
+
+      await repo.delete(added.id);
+
+      expect(await objectFile(repo, added.id, '.pvb').exists(), isFalse);
+      expect(await legacyMetadata.exists(), isFalse);
+      expect(await legacyThumbnail.exists(), isFalse);
+      expect(await modernThumbnail.exists(), isFalse);
+    },
+  );
+
+  test(
+    'orphan modern thumbnail cache is reclaimed without affecting payload scan',
+    () async {
+      final repo = await repository('0000');
+      final added = await repo.addBytes(
+        Uint8List.fromList([3, 2, 1]),
+        kind: VaultItemKind.image,
+      );
+      await repo.writeThumbnail(
+        added.id,
+        Uint8List.fromList([0xff, 0xd8, 3, 0xff, 0xd9]),
+      );
+      final thumbnail = thumbnailFile(repo, added.id);
+      expect(await thumbnail.exists(), isTrue);
+      await objectFile(repo, added.id, '.pvb').delete();
+
+      final scan = await repo.scan();
+
+      expect(await thumbnail.exists(), isFalse);
+      expect(scan.items, isEmpty);
+      expect(scan.hasProblems, isFalse);
+      expect(scan.orphanedSidecarCount, 1);
+    },
+  );
 
   test('session clear and switch destroy replaced encryption keys', () async {
     final session = PortableVaultSession();
@@ -397,10 +444,6 @@ void main() {
         Uint8List.fromList([4, 5, 6]),
         kind: VaultItemKind.image,
       );
-      await repo.writeThumbnail(
-        added.id,
-        Uint8List.fromList([0xff, 0xd8, 4, 0xff, 0xd9]),
-      );
       final material = repo.session.requireMaterial();
       final objects = Directory(
         '${root.path}${Platform.pathSeparator}${material.namespaceId}'
@@ -417,10 +460,9 @@ void main() {
         '${objects.path}${Platform.pathSeparator}${added.id}.pvt',
       );
       await partial.writeAsBytes([1, 2, 3], flush: true);
+      await thumbnail.writeAsBytes([4, 5, 6], flush: true);
 
       await File('${objects.path}${Platform.pathSeparator}${added.id}.pvb')
-          .delete();
-      await File('${objects.path}${Platform.pathSeparator}${added.id}.pvm')
           .delete();
 
       final scan = await repo.scan();
@@ -456,6 +498,41 @@ void main() {
     expect(scan.orphanedSidecarCount, 0);
     expect(scan.hasProblems, isFalse);
   });
+
+  test(
+    'second repository preserves a stale partial owned by an active writer',
+    () async {
+      final storage = _StalePartialSharedStorage();
+      final firstSession = PortableVaultSession();
+      final secondSession = PortableVaultSession();
+      await firstSession.open('0000');
+      await secondSession.open('0000');
+      final first = PortableVaultRepository(
+        storage: storage,
+        session: firstSession,
+      );
+      final second = PortableVaultRepository(
+        storage: storage,
+        session: secondSession,
+      );
+      final source = StreamController<List<int>>();
+
+      final import = first.addStream(source.stream, kind: VaultItemKind.video);
+      await storage.partialCreated.future;
+      expect(storage.hasPartial, isTrue);
+
+      final scanDuringWrite = await second.scan();
+      expect(storage.hasPartial, isTrue);
+      expect(scanDuringWrite.hasProblems, isFalse);
+
+      source.add([1, 2, 3, 4]);
+      await source.close();
+      final item = await import;
+
+      expect(storage.hasPartial, isFalse);
+      expect(await second.readBytes(item.id), Uint8List.fromList([1, 2, 3, 4]));
+    },
+  );
 
   test('scan reclaims legacy and future-dated abandoned partials', () async {
     final repo = await repository('0000');
@@ -620,11 +697,129 @@ class _DeferredPortableVaultKeyDeriver extends PortableVaultKeyDeriver {
   }
 }
 
-class _RecordingPortableVaultStorage implements PortableVaultStreamingStorage {
-  _RecordingPortableVaultStorage(this.delegate);
+class _StalePartialSharedStorage implements PortableVaultStreamingStorage {
+  final Map<String, Uint8List> _files = <String, Uint8List>{};
+  final Completer<String> partialCreated = Completer<String>();
+
+  bool get hasPartial => _files.keys.any((path) => path.contains('.partial-'));
+
+  @override
+  Future<bool> hasAccess() async => true;
+
+  @override
+  Future<List<String>> list(String path) async {
+    final prefix = path.isEmpty ? '' : '$path/';
+    return _files.keys
+        .where((candidate) => candidate.startsWith(prefix))
+        .map((candidate) => candidate.substring(prefix.length))
+        .where((name) => !name.contains('/'))
+        .toList(growable: false);
+  }
+
+  @override
+  Future<Uint8List> read(String path) async {
+    final value = _files[path];
+    if (value == null) {
+      throw const PortableVaultStorageNotFoundException();
+    }
+    return Uint8List.fromList(value);
+  }
+
+  @override
+  Future<void> write(String path, Uint8List bytes) async {
+    _files[path] = Uint8List.fromList(bytes);
+  }
+
+  @override
+  Future<void> delete(String path) async {
+    _files.remove(path);
+  }
+
+  @override
+  Future<PortableVaultWriteSession> beginWrite(String path) async {
+    final staleMillis = DateTime.now()
+        .subtract(const Duration(days: 2))
+        .millisecondsSinceEpoch;
+    final partial = '$path.partial-$staleMillis-shared';
+    _files[partial] = Uint8List(0);
+    if (!partialCreated.isCompleted) partialCreated.complete(partial);
+    return _MemoryWriteSession(
+      files: _files,
+      targetPath: path,
+      partialPath: partial,
+    );
+  }
+}
+
+class _MemoryWriteSession implements PortableVaultWriteSession {
+  _MemoryWriteSession({
+    required this.files,
+    required this.targetPath,
+    required this.partialPath,
+  });
+
+  final Map<String, Uint8List> files;
+  final String targetPath;
+  final String partialPath;
+  final List<int> _bytes = <int>[];
+  bool _closed = false;
+
+  void _ensureOpen() {
+    if (_closed) {
+      throw const PortableVaultStorageException('Write session is closed');
+    }
+    if (!files.containsKey(partialPath)) {
+      throw const PortableVaultStorageException('Active partial was reclaimed');
+    }
+  }
+
+  @override
+  Future<void> append(List<int> bytes) async {
+    _ensureOpen();
+    _bytes.addAll(bytes);
+    files[partialPath] = Uint8List.fromList(_bytes);
+  }
+
+  @override
+  Future<void> patch(int offset, List<int> bytes) async {
+    _ensureOpen();
+    if (offset < 0 || offset + bytes.length > _bytes.length) {
+      throw const PortableVaultStorageException('Invalid patch range');
+    }
+    _bytes.setRange(offset, offset + bytes.length, bytes);
+    files[partialPath] = Uint8List.fromList(_bytes);
+  }
+
+  @override
+  Future<void> commit() async {
+    _ensureOpen();
+    _closed = true;
+    files[targetPath] = Uint8List.fromList(_bytes);
+    files.remove(partialPath);
+  }
+
+  @override
+  Future<void> abort() async {
+    if (_closed) return;
+    _closed = true;
+    files.remove(partialPath);
+  }
+}
+
+class _RecordingPortableVaultStorage
+    implements
+        PortableVaultStreamingStorage,
+        PortableVaultMetadataStorage,
+        PortableVaultEntryMetadataStorage {
+  _RecordingPortableVaultStorage(
+    this.delegate, {
+    this.suppressModifiedAt = false,
+  });
 
   final PortableVaultStreamingStorage delegate;
+  final bool suppressModifiedAt;
   final List<String> deleted = <String>[];
+  final List<String> reads = <String>[];
   String? failSuffix;
 
   @override
@@ -634,7 +829,50 @@ class _RecordingPortableVaultStorage implements PortableVaultStreamingStorage {
   Future<List<String>> list(String path) => delegate.list(path);
 
   @override
-  Future<Uint8List> read(String path) => delegate.read(path);
+  Future<List<PortableVaultStorageEntryMetadata>> listMetadata(String path) {
+    final target = delegate;
+    if (target is! PortableVaultMetadataStorage) {
+      throw StateError('delegate does not expose metadata');
+    }
+    return (target as PortableVaultMetadataStorage)
+        .listMetadata(path)
+        .then(
+          (entries) => suppressModifiedAt
+              ? entries
+                    .map(
+                      (entry) => PortableVaultStorageEntryMetadata(
+                        name: entry.name,
+                        sizeBytes: entry.sizeBytes,
+                        modifiedAtMillis: 0,
+                      ),
+                    )
+                    .toList(growable: false)
+              : entries,
+        );
+  }
+
+  @override
+  Future<PortableVaultStorageEntryMetadata?> metadata(String path) async {
+    final target = delegate;
+    if (target is! PortableVaultEntryMetadataStorage) {
+      throw StateError('delegate does not expose entry metadata');
+    }
+    final entry = await (target as PortableVaultEntryMetadataStorage).metadata(
+      path,
+    );
+    if (entry == null || !suppressModifiedAt) return entry;
+    return PortableVaultStorageEntryMetadata(
+      name: entry.name,
+      sizeBytes: entry.sizeBytes,
+      modifiedAtMillis: 0,
+    );
+  }
+
+  @override
+  Future<Uint8List> read(String path) {
+    reads.add(path);
+    return delegate.read(path);
+  }
 
   @override
   Future<void> write(String path, Uint8List bytes) =>

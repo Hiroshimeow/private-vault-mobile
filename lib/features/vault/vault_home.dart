@@ -398,20 +398,35 @@ class _VaultHomeState extends State<VaultHome> {
   }
 
   Future<void> _open(VaultItem item) async {
+    if (item.kind == VaultItemKind.image) {
+      final images = _items
+          .where((candidate) => candidate.kind == VaultItemKind.image)
+          .toList(growable: false);
+      final initialIndex = images.indexWhere(
+        (candidate) => candidate.id == item.id,
+      );
+      if (initialIndex < 0) return;
+      await Navigator.of(context).push<void>(
+        MaterialPageRoute(
+          builder: (_) => _VaultImageGalleryViewer(
+            items: images,
+            initialIndex: initialIndex,
+            repository: widget.repository,
+            onExport: _confirmExport,
+            onDelete: _deleteImageFromGallery,
+          ),
+        ),
+      );
+      return;
+    }
+
     File? previewFile;
     try {
-      final supportsThumbnail =
-          item.kind == VaultItemKind.image || item.kind == VaultItemKind.video;
-      final cachedThumbnail = supportsThumbnail
+      final cachedThumbnail = item.kind == VaultItemKind.video
           ? await _thumbnailFor(item)
           : null;
       final bytes = await widget.repository.readBytes(item.id);
       if (!mounted) return;
-
-      if (item.kind == VaultItemKind.image && cachedThumbnail == null) {
-        await widget.media.cacheImageThumbnail(item, bytes);
-        _thumbnailFutures.remove(item.id);
-      }
 
       if (item.kind == VaultItemKind.video) {
         previewFile = await widget.media.createVideoPreviewFile(item, bytes);
@@ -425,17 +440,7 @@ class _VaultHomeState extends State<VaultHome> {
       }
 
       if (!mounted) return;
-      if (item.kind == VaultItemKind.image) {
-        await Navigator.of(context).push<void>(
-          MaterialPageRoute(
-            builder: (_) => _FullScreenImagePreview(
-              bytes: bytes,
-              onExport: () => _confirmExport(item),
-              onDelete: () => _confirmDelete(item),
-            ),
-          ),
-        );
-      } else if (item.kind == VaultItemKind.video && previewFile != null) {
+      if (item.kind == VaultItemKind.video && previewFile != null) {
         await Navigator.of(context).push<void>(
           MaterialPageRoute(
             builder: (_) => _FullScreenVideoPreview(
@@ -473,6 +478,39 @@ class _VaultHomeState extends State<VaultHome> {
         await widget.media.deletePreviewFile(file);
       }
     }
+  }
+
+  Future<bool> _deleteImageFromGallery(VaultItem item) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      useRootNavigator: false,
+      builder: (context) => AlertDialog(
+        title: const Text('Delete from vault?'),
+        content: const Text(
+          'This removes the app copy. Flash storage does not guarantee forensic secure erase.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Delete'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return false;
+    await widget.repository.delete(item.id);
+    _thumbnailFutures.remove(item.id);
+    if (mounted) {
+      setState(() {
+        _items = _items.where((candidate) => candidate.id != item.id).toList();
+        _selectedIds.remove(item.id);
+      });
+    }
+    return true;
   }
 
   Future<void> _confirmExport(VaultItem item) async {
@@ -880,53 +918,163 @@ class _VaultGridTile extends StatelessWidget {
   }
 }
 
-class _FullScreenImagePreview extends StatelessWidget {
-  const _FullScreenImagePreview({
-    required this.bytes,
+class _VaultImageGalleryViewer extends StatefulWidget {
+  const _VaultImageGalleryViewer({
+    required this.items,
+    required this.initialIndex,
+    required this.repository,
     required this.onExport,
     required this.onDelete,
   });
 
-  final Uint8List bytes;
-  final VoidCallback onExport;
-  final VoidCallback onDelete;
+  final List<VaultItem> items;
+  final int initialIndex;
+  final VaultRepository repository;
+  final Future<void> Function(VaultItem item) onExport;
+  final Future<bool> Function(VaultItem item) onDelete;
+
+  @override
+  State<_VaultImageGalleryViewer> createState() =>
+      _VaultImageGalleryViewerState();
+}
+
+class _VaultImageGalleryViewerState extends State<_VaultImageGalleryViewer> {
+  late final PageController _controller;
+  late List<VaultItem> _items;
+  late int _index;
+  final Map<String, Future<Uint8List>> _reads = {};
+
+  @override
+  void initState() {
+    super.initState();
+    _items = List<VaultItem>.from(widget.items);
+    _index = widget.initialIndex < 0
+        ? 0
+        : widget.initialIndex >= _items.length
+        ? _items.length - 1
+        : widget.initialIndex;
+    _controller = PageController(initialPage: _index);
+    _retainAdjacent();
+  }
+
+  @override
+  void dispose() {
+    _reads.clear();
+    _controller.dispose();
+    super.dispose();
+  }
+
+  Future<Uint8List> _bytesFor(VaultItem item) =>
+      _reads.putIfAbsent(item.id, () => widget.repository.readBytes(item.id));
+
+  void _retainAdjacent() {
+    if (_items.isEmpty) return;
+    final keep = <String>{};
+    for (var offset = -1; offset <= 1; offset += 1) {
+      final candidate = _index + offset;
+      if (candidate < 0 || candidate >= _items.length) continue;
+      final item = _items[candidate];
+      keep.add(item.id);
+      _bytesFor(item);
+    }
+    _reads.removeWhere((id, _) => !keep.contains(id));
+  }
+
+  void _onPageChanged(int index) {
+    setState(() => _index = index);
+    _retainAdjacent();
+  }
+
+  Future<void> _deleteCurrent() async {
+    if (_items.isEmpty) return;
+    final current = _items[_index];
+    if (!await widget.onDelete(current) || !mounted) return;
+    _reads.remove(current.id);
+    setState(() {
+      _items.removeAt(_index);
+      if (_items.isNotEmpty && _index >= _items.length) {
+        _index = _items.length - 1;
+      }
+    });
+    if (_items.isEmpty) {
+      Navigator.of(context).pop();
+      return;
+    }
+    _controller.jumpToPage(_index);
+    _retainAdjacent();
+  }
 
   @override
   Widget build(BuildContext context) {
+    if (_items.isEmpty) return const SizedBox.shrink();
+    final current = _items[_index];
     return Scaffold(
       backgroundColor: Colors.black,
       appBar: AppBar(
         backgroundColor: Colors.black,
         foregroundColor: Colors.white,
+        leading: IconButton(
+          key: const Key('vault-image-back'),
+          tooltip: 'Back',
+          onPressed: () => Navigator.of(context).pop(),
+          icon: const Icon(Icons.arrow_back),
+        ),
+        title: Text('${_index + 1} / ${_items.length}'),
         actions: [
           IconButton(
             key: const Key('vault-image-export'),
             tooltip: 'Export image',
-            onPressed: onExport,
+            onPressed: () => widget.onExport(current),
             icon: const Icon(Icons.ios_share_outlined),
           ),
           IconButton(
             key: const Key('vault-image-delete'),
             tooltip: 'Delete image',
-            onPressed: onDelete,
+            onPressed: _deleteCurrent,
             icon: const Icon(Icons.delete_outline),
           ),
         ],
       ),
-      body: Center(
-        child: InteractiveViewer(
-          minScale: 1,
-          maxScale: 5,
-          child: Image.memory(
-            bytes,
-            key: const Key('vault-fullscreen-image'),
-            fit: BoxFit.contain,
-            errorBuilder: (_, _, _) => const Text(
-              'Image data could not be displayed.',
-              style: TextStyle(color: Colors.white),
-            ),
-          ),
-        ),
+      body: PageView.builder(
+        key: const Key('vault-image-page-view'),
+        controller: _controller,
+        itemCount: _items.length,
+        onPageChanged: _onPageChanged,
+        itemBuilder: (context, index) {
+          final item = _items[index];
+          return FutureBuilder<Uint8List>(
+            future: _bytesFor(item),
+            builder: (context, snapshot) {
+              if (snapshot.hasError) {
+                return const Center(
+                  child: Text(
+                    'Image data could not be displayed.',
+                    style: TextStyle(color: Colors.white),
+                  ),
+                );
+              }
+              final bytes = snapshot.data;
+              if (bytes == null) {
+                return const Center(child: CircularProgressIndicator());
+              }
+              return Center(
+                child: InteractiveViewer(
+                  minScale: 1,
+                  maxScale: 5,
+                  child: Image.memory(
+                    bytes,
+                    key: Key('vault-fullscreen-image-${item.id}'),
+                    fit: BoxFit.contain,
+                    errorBuilder: (_, _, _) => const Text(
+                      'Image data could not be displayed.',
+                      style: TextStyle(color: Colors.white),
+                    ),
+                  ),
+                ),
+              );
+            },
+          );
+        },
       ),
     );
   }
