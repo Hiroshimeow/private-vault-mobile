@@ -1,12 +1,28 @@
 import 'dart:async';
+import 'dart:developer';
 
 import 'package:flutter/material.dart';
+
+class StartupStageRunner {
+  const StartupStageRunner({this.timeout = const Duration(seconds: 4)});
+
+  final Duration timeout;
+
+  Future<T> run<T>(String stage, Future<T> Function() action) async {
+    Timeline.instantSync('startup_stage_begin', arguments: {'stage': stage});
+    try {
+      return await action().timeout(timeout);
+    } finally {
+      Timeline.instantSync('startup_stage_end', arguments: {'stage': stage});
+    }
+  }
+}
 
 class StartupBootstrap extends StatefulWidget {
   const StartupBootstrap({
     super.key,
     required this.initialize,
-    this.timeout = const Duration(seconds: 8),
+    this.timeout = const Duration(seconds: 20),
   });
 
   final Future<Widget> Function() initialize;
@@ -24,7 +40,9 @@ class _StartupBootstrapState extends State<StartupBootstrap> {
   @override
   void initState() {
     super.initState();
-    unawaited(_initialize());
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) unawaited(_initialize());
+    });
   }
 
   Future<void> _initialize() async {
@@ -56,9 +74,9 @@ class _StartupBootstrapState extends State<StartupBootstrap> {
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  const Icon(Icons.lock_outline, size: 40),
+                  const Icon(Icons.calculate_outlined, size: 40),
                   const SizedBox(height: 16),
-                  const Text('Private Vault'),
+                  const Text('Calculator'),
                   const SizedBox(height: 12),
                   if (_failed) ...[
                     const Text('Startup unavailable'),

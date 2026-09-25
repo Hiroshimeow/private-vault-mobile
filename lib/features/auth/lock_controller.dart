@@ -48,7 +48,10 @@ class LockController extends ChangeNotifier {
   void panic() => lock();
 
   void onBackground({Duration delay = Duration.zero}) {
-    if (!backgroundLock) return;
+    if (!backgroundLock) {
+      _unlockGeneration += 1;
+      return;
+    }
     if (_isLocked) {
       _unlockGeneration += 1;
       return;

@@ -376,4 +376,20 @@ void main() {
     expect(await service.export(item.id, fileName: 'export.bin'), isTrue);
     expect(exported, Uint8List.fromList([9, 8, 7]));
   });
+
+  test('strict startup preview purge propagates storage failure', () async {
+    final service = MediaVaultService(
+      repository: repo,
+      pickImport: () async => null,
+      capturePhoto: () async => null,
+      saveExport: (_, _) async => true,
+      temporaryDirectory: () async => throw FileSystemException('unavailable'),
+    );
+
+    await expectLater(
+      service.purgePreviewPlaintextStrict(),
+      throwsA(isA<FileSystemException>()),
+    );
+    await expectLater(service.purgePreviewPlaintext(), completes);
+  });
 }

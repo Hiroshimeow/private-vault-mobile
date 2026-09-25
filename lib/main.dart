@@ -29,12 +29,20 @@ void main() {
 }
 
 Future<Widget> _initializePrivateVault() async {
+  const stages = StartupStageRunner();
   final settingsStore = AppSettingsStore(SharedPreferencesSettingsStorage());
-  final settings = await settingsStore.load();
+  final settings = await stages.run('settings_load', settingsStore.load);
   final secrets = FlutterSecureSecretStore();
   final unlockService = SecureUnlockService(store: secrets);
-  if (!await unlockService.isConfigured()) {
-    await unlockService.configure('0000');
+  final configured = await stages.run(
+    'secure_store_read',
+    unlockService.isConfigured,
+  );
+  if (!configured) {
+    await stages.run(
+      'default_pin_write',
+      () => unlockService.configure('0000'),
+    );
   }
   final lockController = LockController();
 
@@ -77,7 +85,7 @@ Future<Widget> _initializePrivateVault() async {
     capturePhoto: MediaVaultService.captureDevicePhoto,
     saveExport: MediaVaultService.saveDeviceExport,
   );
-  await media.purgePreviewPlaintext();
+  await stages.run('preview_cleanup', media.purgePreviewPlaintextStrict);
   final vaultShuttle = Platform.isAndroid
       ? VaultShuttleService(
           repository: repository,
@@ -86,7 +94,7 @@ Future<Widget> _initializePrivateVault() async {
         )
       : null;
   if (vaultShuttle != null) {
-    await vaultShuttle.purgeStagedPlaintext();
+    await stages.run('staged_cleanup', vaultShuttle.purgeStagedPlaintext);
   }
 
   final panic = PanicSensorService(
