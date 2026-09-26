@@ -22,11 +22,15 @@ class PortableVaultRepository
     required this.storage,
     required this.session,
     PortableVaultObjectCodec? objectCodec,
+    this.operationRecorder,
   }) : objectCodec = objectCodec ?? PortableVaultObjectCodec();
 
   final PortableVaultStorage storage;
   final PortableVaultSession session;
   final PortableVaultObjectCodec objectCodec;
+  final VaultOperationRecorder? operationRecorder;
+
+  void _record(VaultOperation operation) => operationRecorder?.call(operation);
 
   static final Expando<Set<String>> _activeWritesByStorage =
       Expando<Set<String>>('portable-vault-active-writes');
@@ -203,7 +207,9 @@ class PortableVaultRepository
   Future<Uint8List> readBytes(String id) async {
     await _requireAccess();
     final material = session.requireMaterial();
+    _record(VaultOperation.payloadRead);
     final encoded = await storage.read(_objectPath(material.namespaceId, id));
+    _record(VaultOperation.payloadDecrypt);
     final object = await objectCodec.decode(encoded, material.encryptionKey);
     _validatePayloadIdentity(
       object,
@@ -222,7 +228,9 @@ class PortableVaultRepository
       _legacyThumbnailPath(material.namespaceId, id),
     ]) {
       try {
+        _record(VaultOperation.thumbnailRead);
         final encoded = await storage.read(path);
+        _record(VaultOperation.thumbnailDecrypt);
         final thumbnail = await objectCodec.decode(
           encoded,
           material.encryptionKey,
@@ -252,9 +260,11 @@ class PortableVaultRepository
     if (bytes.isEmpty) return;
     await _requireAccess();
     final material = session.requireMaterial();
+    _record(VaultOperation.payloadRead);
     final payloadEncoded = await storage.read(
       _objectPath(material.namespaceId, id),
     );
+    _record(VaultOperation.payloadDecrypt);
     final payload = await objectCodec.decode(
       payloadEncoded,
       material.encryptionKey,
@@ -264,16 +274,47 @@ class PortableVaultRepository
       expectedNamespace: material.namespaceId,
       expectedId: id,
     );
+    await _writeThumbnail(
+      material: material,
+      id: id,
+      createdAtMillis: payload.createdAtMillis,
+      bytes: bytes,
+    );
+  }
+
+  @override
+  Future<void> writeThumbnailForAuthenticatedItem(
+    VaultItem item,
+    Uint8List bytes,
+  ) async {
+    if (bytes.isEmpty) return;
+    await _requireAccess();
+    final material = session.requireMaterial();
+    await _writeThumbnail(
+      material: material,
+      id: item.id,
+      createdAtMillis: item.createdAt.toUtc().millisecondsSinceEpoch,
+      bytes: bytes,
+    );
+  }
+
+  Future<void> _writeThumbnail({
+    required PortableVaultKeyMaterial material,
+    required String id,
+    required int createdAtMillis,
+    required Uint8List bytes,
+  }) async {
     final encoded = await objectCodec.encode(
       PortableVaultObject(
         fileName: '$id.thumb',
         mediaType: 'image/jpeg',
-        createdAtMillis: payload.createdAtMillis,
+        createdAtMillis: createdAtMillis,
         namespaceId: material.namespaceId,
         bytes: bytes,
       ),
       material.encryptionKey,
     );
+    _record(VaultOperation.thumbnailWrite);
     await storage.write(_thumbnailPath(material.namespaceId, id), encoded);
   }
 
@@ -295,11 +336,14 @@ class PortableVaultRepository
     try {
       final targetStorage = storage;
       if (targetStorage is PortableVaultMetadataStorage) {
+        _record(VaultOperation.objectListing);
+        _record(VaultOperation.metadataProviderQuery);
         final entries = await (targetStorage as PortableVaultMetadataStorage)
             .listMetadata(basePath);
         entryMetadata = {for (final entry in entries) entry.name: entry};
         names = entryMetadata.keys.toList(growable: false);
       } else {
+        _record(VaultOperation.objectListing);
         names = await storage.list(basePath);
       }
     } on PortableVaultStorageException {
@@ -348,6 +392,7 @@ class PortableVaultRepository
     final thumbnailCachePath = '${material.namespaceId}/cache/thumbnails';
     Set<String> modernThumbnailIds = const <String>{};
     try {
+      _record(VaultOperation.objectListing);
       modernThumbnailIds = (await storage.list(thumbnailCachePath))
           .where((name) => name.endsWith('.pvt'))
           .map((name) => name.substring(0, name.length - '.pvt'.length))
@@ -363,6 +408,7 @@ class PortableVaultRepository
         .difference(survivingPartialIds);
     final orphanedSidecarCount = orphanSidecarIds.length;
     for (final id in orphanSidecarIds) {
+      _record(VaultOperation.mutationReconciliation);
       if (metadataIds.contains(id)) {
         try {
           await storage.delete('$basePath/$id.pvm');
@@ -445,6 +491,7 @@ class PortableVaultRepository
           (entry) => catalog[entry.key] != entry.value,
         );
     if (catalogChanged) {
+      _record(VaultOperation.mutationReconciliation);
       await _writeCatalogBestEffort(
         namespaceId: material.namespaceId,
         encryptionKey: material.encryptionKey,
@@ -533,7 +580,9 @@ class PortableVaultRepository
   }) async {
     // The .pvb payload is authoritative. Listing caches may accelerate metadata
     // recovery, but they must never make a corrupt payload appear healthy.
+    _record(VaultOperation.payloadRead);
     final payloadEncoded = await storage.read('$basePath/$id.pvb');
+    _record(VaultOperation.payloadDecrypt);
     final payload = await objectCodec.decode(payloadEncoded, encryptionKey);
     _validatePayloadIdentity(
       payload,
@@ -579,7 +628,9 @@ class PortableVaultRepository
     required SecretKey encryptionKey,
   }) async {
     try {
+      _record(VaultOperation.catalogRead);
       final encoded = await storage.read(_catalogPath(namespaceId));
+      _record(VaultOperation.catalogDecrypt);
       final object = await objectCodec.decode(encoded, encryptionKey);
       if (object.namespaceId != namespaceId ||
           object.fileName != 'catalog.json' ||
@@ -652,6 +703,7 @@ class PortableVaultRepository
     final targetStorage = storage;
     if (targetStorage is PortableVaultEntryMetadataStorage) {
       try {
+        _record(VaultOperation.metadataProviderQuery);
         metadata = await (targetStorage as PortableVaultEntryMetadataStorage)
             .metadata(_objectPath(namespaceId, id));
       } on PortableVaultStorageException {
@@ -795,9 +847,9 @@ class _PortableCatalogEntry {
     if (metadata.hasReliableModificationTime) {
       return modifiedAtMillis == metadata.modifiedAtMillis;
     }
-    // Some SAF providers expose size but no stable mtime. Size is sufficient
-    // only for the interactive listing cache; payload reads remain authenticated.
-    return modifiedAtMillis == null;
+    // Size alone cannot distinguish a same-size replacement. Providers without
+    // a trustworthy modification fingerprint must reauthenticate the payload.
+    return false;
   }
 
   Map<String, Object> toJson() => <String, Object>{

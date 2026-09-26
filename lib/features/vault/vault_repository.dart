@@ -10,6 +10,22 @@ import 'package:private_vault_mobile/core/storage/secret_store.dart';
 
 enum VaultItemKind { unknown, note, image, video, document }
 
+enum VaultOperation {
+  objectListing,
+  metadataProviderQuery,
+  payloadRead,
+  payloadDecrypt,
+  catalogRead,
+  catalogDecrypt,
+  thumbnailRead,
+  thumbnailDecrypt,
+  thumbnailBuild,
+  thumbnailWrite,
+  mutationReconciliation,
+}
+
+typedef VaultOperationRecorder = void Function(VaultOperation operation);
+
 class VaultItem {
   const VaultItem({
     required this.id,
@@ -103,6 +119,10 @@ abstract interface class StreamingVaultRepository implements VaultRepository {
 abstract interface class VaultThumbnailRepository implements VaultRepository {
   Future<Uint8List?> readThumbnail(String id);
   Future<void> writeThumbnail(String id, Uint8List bytes);
+  Future<void> writeThumbnailForAuthenticatedItem(
+    VaultItem item,
+    Uint8List bytes,
+  );
 }
 
 abstract interface class VaultScanAwareRepository implements VaultRepository {

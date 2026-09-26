@@ -87,6 +87,14 @@ class ThumbnailRecordingRepository
   Future<void> writeThumbnail(String id, Uint8List bytes) async {
     thumbnails[id] = Uint8List.fromList(bytes);
   }
+
+  @override
+  Future<void> writeThumbnailForAuthenticatedItem(
+    VaultItem item,
+    Uint8List bytes,
+  ) async {
+    thumbnails[item.id] = Uint8List.fromList(bytes);
+  }
 }
 
 class MemoryVaultKeyStore implements VaultKeyStore {
@@ -147,12 +155,15 @@ void main() {
     final repository = ThumbnailRecordingRepository();
     final original = img.Image(width: 800, height: 400);
     final originalBytes = Uint8List.fromList(img.encodePng(original));
+    final operations = <VaultOperation, int>{};
     final service = MediaVaultService(
       repository: repository,
       pickImport: () async =>
           PickedVaultData(bytes: originalBytes, kind: VaultItemKind.image),
       capturePhoto: () async => null,
       saveExport: (_, _) async => true,
+      operationRecorder: (operation) =>
+          operations.update(operation, (count) => count + 1, ifAbsent: () => 1),
     );
 
     final item = await service.importFile();
@@ -164,6 +175,7 @@ void main() {
     expect(thumbnail, isNotNull);
     expect(thumbnail!.width, lessThanOrEqualTo(384));
     expect(thumbnail.height, lessThan(original.height));
+    expect(operations, {VaultOperation.thumbnailBuild: 1});
     expect(repository.payloads[item.id], originalBytes);
   });
 
