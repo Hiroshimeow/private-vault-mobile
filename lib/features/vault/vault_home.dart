@@ -116,6 +116,15 @@ class _VaultHomeState extends State<VaultHome> {
     }
   }
 
+  void _removeInvalidItem(String id) {
+    _thumbnailFutures.remove(id);
+    if (!mounted) return;
+    setState(() {
+      _items = _items.where((item) => item.id != id).toList(growable: false);
+      _selectedIds.remove(id);
+    });
+  }
+
   void _addLoadedItems(Iterable<VaultItem> added) {
     final next = [..._items, ...added]
       ..sort((a, b) => b.createdAt.compareTo(a.createdAt));
@@ -274,6 +283,9 @@ class _VaultHomeState extends State<VaultHome> {
           } else {
             failed += 1;
           }
+        } on VaultItemInvalidException catch (error) {
+          _removeInvalidItem(error.id);
+          failed += 1;
         } on Object {
           failed += 1;
         }
@@ -455,6 +467,7 @@ class _VaultHomeState extends State<VaultHome> {
             onExport: _confirmExport,
             onDelete: _deleteImageFromGallery,
             onBytesLoaded: _cacheMissingImageThumbnail,
+            onInvalidItem: _removeInvalidItem,
           ),
         ),
       );
@@ -508,6 +521,12 @@ class _VaultHomeState extends State<VaultHome> {
       if (item.kind == VaultItemKind.unknown && mounted) {
         await _reload();
       }
+    } on VaultItemInvalidException catch (error) {
+      _removeInvalidItem(error.id);
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Item could not be decrypted.')),
+      );
     } on Object {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
@@ -583,6 +602,14 @@ class _VaultHomeState extends State<VaultHome> {
     bool ok;
     try {
       ok = await widget.media.export(item.id, fileName: _exportFileName(item));
+    } on VaultItemInvalidException catch (error) {
+      _removeInvalidItem(error.id);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Item could not be decrypted.')),
+        );
+      }
+      return;
     } finally {
       widget.onSystemHandoffChanged?.call(false);
     }
@@ -967,6 +994,7 @@ class _VaultImageGalleryViewer extends StatefulWidget {
     required this.onExport,
     required this.onDelete,
     required this.onBytesLoaded,
+    required this.onInvalidItem,
   });
 
   final List<VaultItem> items;
@@ -975,6 +1003,7 @@ class _VaultImageGalleryViewer extends StatefulWidget {
   final Future<void> Function(VaultItem item) onExport;
   final Future<bool> Function(VaultItem item) onDelete;
   final Future<void> Function(VaultItem item, Uint8List bytes) onBytesLoaded;
+  final ValueChanged<String> onInvalidItem;
 
   @override
   State<_VaultImageGalleryViewer> createState() =>
@@ -1009,7 +1038,14 @@ class _VaultImageGalleryViewerState extends State<_VaultImageGalleryViewer> {
   }
 
   Future<Uint8List> _bytesFor(VaultItem item) =>
-      _reads.putIfAbsent(item.id, () => widget.repository.readBytes(item.id));
+      _reads.putIfAbsent(item.id, () async {
+        try {
+          return await widget.repository.readBytes(item.id);
+        } on VaultItemInvalidException catch (error) {
+          widget.onInvalidItem(error.id);
+          rethrow;
+        }
+      });
 
   void _retainAdjacent() {
     if (_items.isEmpty) return;

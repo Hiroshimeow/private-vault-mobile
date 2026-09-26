@@ -207,16 +207,33 @@ class PortableVaultRepository
   Future<Uint8List> readBytes(String id) async {
     await _requireAccess();
     final material = session.requireMaterial();
-    _record(VaultOperation.payloadRead);
-    final encoded = await storage.read(_objectPath(material.namespaceId, id));
-    _record(VaultOperation.payloadDecrypt);
-    final object = await objectCodec.decode(encoded, material.encryptionKey);
-    _validatePayloadIdentity(
-      object,
-      expectedNamespace: material.namespaceId,
-      expectedId: id,
-    );
-    return object.bytes;
+    try {
+      _record(VaultOperation.payloadRead);
+      final encoded = await storage.read(_objectPath(material.namespaceId, id));
+      _record(VaultOperation.payloadDecrypt);
+      final object = await objectCodec.decode(encoded, material.encryptionKey);
+      _validatePayloadIdentity(
+        object,
+        expectedNamespace: material.namespaceId,
+        expectedId: id,
+      );
+      return object.bytes;
+    } on PortableVaultStorageNotFoundException {
+      await _invalidateCatalogEntry(material, id);
+      throw VaultItemInvalidException(id);
+    } on PortableVaultUnsupportedProfileException {
+      await _invalidateCatalogEntry(material, id);
+      throw VaultItemInvalidException(id);
+    } on VaultIntegrityException {
+      await _invalidateCatalogEntry(material, id);
+      throw VaultItemInvalidException(id);
+    } on PortableVaultForeignObjectException {
+      await _invalidateCatalogEntry(material, id);
+      throw VaultItemInvalidException(id);
+    } on PortableVaultFormatException {
+      await _invalidateCatalogEntry(material, id);
+      throw VaultItemInvalidException(id);
+    }
   }
 
   @override
@@ -728,6 +745,18 @@ class PortableVaultRepository
     );
   }
 
+  Future<void> _invalidateCatalogEntry(
+    PortableVaultKeyMaterial material,
+    String id,
+  ) async {
+    _record(VaultOperation.mutationReconciliation);
+    await _removeFromCatalogBestEffort(
+      namespaceId: material.namespaceId,
+      encryptionKey: material.encryptionKey,
+      id: id,
+    );
+  }
+
   Future<void> _removeFromCatalogBestEffort({
     required String namespaceId,
     required SecretKey encryptionKey,
@@ -847,9 +876,9 @@ class _PortableCatalogEntry {
     if (metadata.hasReliableModificationTime) {
       return modifiedAtMillis == metadata.modifiedAtMillis;
     }
-    // Size alone cannot distinguish a same-size replacement. Providers without
-    // a trustworthy modification fingerprint must reauthenticate the payload.
-    return false;
+    // Weak provider metadata is only a freshness hint for listing. Payload
+    // authenticity is enforced when bytes are actually consumed.
+    return modifiedAtMillis == null;
   }
 
   Map<String, Object> toJson() => <String, Object>{

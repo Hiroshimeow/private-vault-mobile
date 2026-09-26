@@ -23,6 +23,7 @@ class FakeVaultRepository implements VaultRepository, VaultThumbnailRepository {
   final thumbnailsById = <String, Uint8List>{};
   final thumbnailReadIds = <String>[];
   final failDeleteIds = <String>{};
+  final invalidReadIds = <String>{};
   final bool failList;
   VaultItemKind? lastAddedKind;
   Uint8List? lastAddedBytes;
@@ -66,6 +67,7 @@ class FakeVaultRepository implements VaultRepository, VaultThumbnailRepository {
   @override
   Future<Uint8List> readBytes(String id) async {
     readBytesCalls += 1;
+    if (invalidReadIds.contains(id)) throw VaultItemInvalidException(id);
     return bytesById[id]!;
   }
 
@@ -490,6 +492,54 @@ void main() {
       expect(find.byKey(const Key('vault-image-export')), findsOneWidget);
       expect(find.byKey(const Key('vault-image-delete')), findsOneWidget);
       expect(repository.readBytesCalls, 1);
+    },
+  );
+
+  testWidgets(
+    'invalid authenticated image read removes stale tile without rescan',
+    (tester) async {
+      final repository = FakeVaultRepository();
+      repository.items.clear();
+      repository.bytesById.clear();
+      final item = VaultItem(
+        id: 'invalid-image',
+        kind: VaultItemKind.image,
+        createdAt: DateTime.utc(2026, 9, 18, 3),
+      );
+      repository.items.add(item);
+      repository.bytesById[item.id] = Uint8List.fromList(
+        img.encodePng(img.Image(width: 2, height: 2)),
+      );
+      repository.invalidReadIds.add(item.id);
+      final media = MediaVaultService(
+        repository: repository,
+        pickImport: () async => null,
+        capturePhoto: () async => null,
+        saveExport: (_, _) async => true,
+      );
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: VaultHome(
+              repository: repository,
+              media: media,
+              confirmExport: true,
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(repository.listCalls, 1);
+
+      await tester.tap(find.byKey(Key('vault-tile-${item.id}')));
+      await tester.pumpAndSettle();
+      expect(find.text('Image data could not be displayed.'), findsOneWidget);
+
+      await tester.tap(find.byKey(const Key('vault-image-back')));
+      await tester.pumpAndSettle();
+      expect(find.byKey(Key('vault-tile-${item.id}')), findsNothing);
+      expect(repository.listCalls, 1);
     },
   );
 

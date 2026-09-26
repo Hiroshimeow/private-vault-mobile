@@ -80,6 +80,12 @@ class VaultFormatException implements Exception {
   const VaultFormatException();
 }
 
+class VaultItemInvalidException implements Exception {
+  const VaultItemInvalidException(this.id);
+
+  final String id;
+}
+
 abstract interface class VaultRepository {
   Future<VaultItem> addBytes(Uint8List bytes, {required VaultItemKind kind});
   Future<Uint8List> readBytes(String id);
