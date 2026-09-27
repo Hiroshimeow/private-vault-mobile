@@ -782,13 +782,19 @@ class PortableVaultRepository
       namespaceId: namespaceId,
       encryptionKey: encryptionKey,
     );
-    if (entries.remove(id) == null) return false;
+    if (entries.remove(id) == null) {
+      return _deleteCatalogBestEffort(namespaceId);
+    }
     final written = await _writeCatalogBestEffort(
       namespaceId: namespaceId,
       encryptionKey: encryptionKey,
       entries: entries,
     );
     if (written) return true;
+    return _deleteCatalogBestEffort(namespaceId);
+  }
+
+  Future<bool> _deleteCatalogBestEffort(String namespaceId) async {
     try {
       await storage.delete(_catalogPath(namespaceId));
       return true;

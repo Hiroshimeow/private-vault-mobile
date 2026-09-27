@@ -261,6 +261,49 @@ void main() {
   );
 
   test(
+    'catalog read failure invalidation stays restart-safe for proven-invalid payload',
+    () async {
+      final session = PortableVaultSession();
+      await session.open('0000');
+      final storage = _RecordingPortableVaultStorage(
+        DirectoryPortableVaultStorage(() async => root),
+        fixedModifiedAtMillis: 1700000000000,
+      );
+      final repo = PortableVaultRepository(storage: storage, session: session);
+      final added = await repo.addBytes(
+        Uint8List.fromList([8, 6, 4, 2]),
+        kind: VaultItemKind.image,
+      );
+
+      final payload = objectFile(repo, added.id, '.pvb');
+      final bytes = await payload.readAsBytes();
+      bytes[bytes.length - 1] ^= 1;
+      await payload.writeAsBytes(bytes, flush: true);
+
+      storage.failReadSuffix = '.pvc';
+      await expectLater(
+        repo.readBytes(added.id),
+        throwsA(isA<VaultItemInvalidException>()),
+      );
+      storage.failReadSuffix = null;
+
+      storage.resetOperations();
+      final reopenedRepo = PortableVaultRepository(
+        storage: storage,
+        session: session,
+      );
+      final reconciled = await reopenedRepo.scan();
+
+      expect(reconciled.items, isEmpty);
+      expect(reconciled.corruptCount, 1);
+      expect(
+        storage.reads.where((path) => path.endsWith('.pvb')),
+        hasLength(1),
+      );
+    },
+  );
+
+  test(
     'unchanged reopen operation counts stay constant at 22 100 and 1000 items',
     () async {
       final session = PortableVaultSession();
@@ -1253,6 +1296,7 @@ class _RecordingPortableVaultStorage
   int listMetadataCalls = 0;
   int metadataCalls = 0;
   String? failSuffix;
+  String? failReadSuffix;
   String? failWriteSuffix;
 
   void resetOperations() {
@@ -1323,6 +1367,9 @@ class _RecordingPortableVaultStorage
   @override
   Future<Uint8List> read(String path) {
     reads.add(path);
+    if (failReadSuffix != null && path.endsWith(failReadSuffix!)) {
+      throw const PortableVaultStorageException('forced read failure');
+    }
     return delegate.read(path);
   }
 
