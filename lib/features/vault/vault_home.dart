@@ -312,7 +312,8 @@ class _VaultHomeState extends State<VaultHome> {
       _importProgress = null;
     });
     widget.onSystemHandoffChanged?.call(true);
-    late final VaultImportBatchResult result;
+    VaultImportBatchResult? result;
+    var pickerFailed = false;
     try {
       result = await widget.media.importFiles(
         moveSource: moveSource,
@@ -321,17 +322,34 @@ class _VaultHomeState extends State<VaultHome> {
           setState(() => _importProgress = progress);
         },
       );
+    } on Object {
+      pickerFailed = true;
     } finally {
       widget.onSystemHandoffChanged?.call(false);
       if (mounted) setState(() => _importProgress = null);
       await _reload();
     }
     if (!mounted) return;
+
+    if (pickerFailed) {
+      ScaffoldMessenger.of(context)
+        ..clearSnackBars()
+        ..showSnackBar(
+          const SnackBar(content: Text('Import failed. Please try again.')),
+        );
+      return;
+    }
+
+    final completed = result!;
+    if (completed.importedCount == 0 && completed.failedCount == 0) {
+      return;
+    }
+
     final verb = moveSource ? 'Moved' : 'Imported';
-    final message = result.failedCount == 0
-        ? '$verb ${result.importedCount} item(s).'
-        : '$verb ${result.importedCount} item(s); '
-              '${result.failedCount} operation(s) need attention.';
+    final message = completed.failedCount == 0
+        ? '$verb ${completed.importedCount} item(s).'
+        : '$verb ${completed.importedCount} item(s); '
+              '${completed.failedCount} operation(s) need attention.';
     ScaffoldMessenger.of(context)
       ..clearSnackBars()
       ..showSnackBar(SnackBar(content: Text(message)));

@@ -241,6 +241,117 @@ void main() {
     expect(exports, 0);
   });
 
+  testWidgets('picker failure is contained and later imports remain usable', (
+    tester,
+  ) async {
+    final repository = FakeVaultRepository();
+    var pickerCalls = 0;
+    final handoffEvents = <bool>[];
+    final media = MediaVaultService(
+      repository: repository,
+      pickImport: () async => null,
+      pickImports: () async {
+        pickerCalls += 1;
+        if (pickerCalls == 1) {
+          throw StateError('synthetic secret picker failure');
+        }
+        return [
+          PickedVaultSource(
+            name: 'picked-$pickerCalls.bin',
+            kind: VaultItemKind.document,
+            openRead: () => Stream<List<int>>.value([pickerCalls]),
+          ),
+        ];
+      },
+      capturePhoto: () async => null,
+      saveExport: (_, _) async => true,
+    );
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: VaultHome(
+            repository: repository,
+            media: media,
+            confirmExport: true,
+            onSystemHandoffChanged: handoffEvents.add,
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    Future<void> importCopy() async {
+      await tester.tap(find.byKey(const Key('vault-import')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('vault-import-copy')));
+      await tester.pumpAndSettle();
+    }
+
+    await importCopy();
+    expect(tester.takeException(), isNull);
+    expect(find.byKey(const Key('vault-import')), findsOneWidget);
+    expect(find.text('Import failed. Please try again.'), findsOneWidget);
+    expect(
+      find.textContaining('synthetic secret picker failure'),
+      findsNothing,
+    );
+
+    await importCopy();
+    expect(tester.takeException(), isNull);
+    expect(find.text('Imported 1 item(s).'), findsOneWidget);
+
+    await importCopy();
+    expect(tester.takeException(), isNull);
+    expect(find.text('Imported 1 item(s).'), findsOneWidget);
+
+    expect(pickerCalls, 3);
+    expect(handoffEvents, [true, false, true, false, true, false]);
+  });
+
+  testWidgets('empty picker result returns to gallery without fake success', (
+    tester,
+  ) async {
+    final repository = FakeVaultRepository();
+    var pickerCalls = 0;
+    final handoffEvents = <bool>[];
+    final media = MediaVaultService(
+      repository: repository,
+      pickImport: () async => null,
+      pickImports: () async {
+        pickerCalls += 1;
+        return const [];
+      },
+      capturePhoto: () async => null,
+      saveExport: (_, _) async => true,
+    );
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: VaultHome(
+            repository: repository,
+            media: media,
+            confirmExport: true,
+            onSystemHandoffChanged: handoffEvents.add,
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byKey(const Key('vault-import')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('vault-import-copy')));
+    await tester.pumpAndSettle();
+
+    expect(tester.takeException(), isNull);
+    expect(pickerCalls, 1);
+    expect(handoffEvents, [true, false]);
+    expect(find.byKey(const Key('vault-import')), findsOneWidget);
+    expect(find.text('Imported 0 item(s).'), findsNothing);
+  });
+
   testWidgets('import menu offers transactional Move to Vault', (tester) async {
     final repository = FakeVaultRepository();
     var sourceDeleted = false;
