@@ -38,6 +38,8 @@ class PortableVaultRepository
   Set<String> get _activeStreamWriteIds =>
       _activeWritesByStorage[storage] ??= <String>{};
 
+  final Set<String> _catalogReauthenticationPaths = <String>{};
+
   @override
   bool get hasOpenSession => session.isOpen;
 
@@ -462,7 +464,11 @@ class PortableVaultRepository
     for (final id in payloadIds) {
       final metadata = entryMetadata['$id.pvb'];
       final cached = catalog[id];
-      if (cached != null && metadata != null && cached.matches(metadata)) {
+      final objectPath = _objectPath(material.namespaceId, id);
+      if (cached != null &&
+          metadata != null &&
+          cached.matches(metadata) &&
+          !_catalogReauthenticationPaths.contains(objectPath)) {
         resolvedCatalog[id] = cached;
         items.add(_catalogItem(cached));
         continue;
@@ -509,11 +515,16 @@ class PortableVaultRepository
         );
     if (catalogChanged) {
       _record(VaultOperation.mutationReconciliation);
-      await _writeCatalogBestEffort(
+      final repaired = await _writeCatalogBestEffort(
         namespaceId: material.namespaceId,
         encryptionKey: material.encryptionKey,
         entries: resolvedCatalog,
       );
+      if (repaired) {
+        _catalogReauthenticationPaths.removeWhere(
+          (path) => path.startsWith('$basePath/'),
+        );
+      }
     }
 
     items.sort((a, b) => b.createdAt.compareTo(a.createdAt));
@@ -677,7 +688,7 @@ class PortableVaultRepository
     }
   }
 
-  Future<void> _writeCatalogBestEffort({
+  Future<bool> _writeCatalogBestEffort({
     required String namespaceId,
     required SecretKey encryptionKey,
     required Map<String, _PortableCatalogEntry> entries,
@@ -700,8 +711,10 @@ class PortableVaultRepository
         encryptionKey,
       );
       await storage.write(_catalogPath(namespaceId), encoded);
+      return true;
     } on Object {
       // The catalog is a reconstructible cache. Payload commit stays authoritative.
+      return false;
     }
   }
 
@@ -750,14 +763,17 @@ class PortableVaultRepository
     String id,
   ) async {
     _record(VaultOperation.mutationReconciliation);
-    await _removeFromCatalogBestEffort(
+    final objectPath = _objectPath(material.namespaceId, id);
+    _catalogReauthenticationPaths.add(objectPath);
+    final invalidated = await _removeFromCatalogBestEffort(
       namespaceId: material.namespaceId,
       encryptionKey: material.encryptionKey,
       id: id,
     );
+    if (invalidated) _catalogReauthenticationPaths.remove(objectPath);
   }
 
-  Future<void> _removeFromCatalogBestEffort({
+  Future<bool> _removeFromCatalogBestEffort({
     required String namespaceId,
     required SecretKey encryptionKey,
     required String id,
@@ -766,12 +782,19 @@ class PortableVaultRepository
       namespaceId: namespaceId,
       encryptionKey: encryptionKey,
     );
-    if (entries.remove(id) == null) return;
-    await _writeCatalogBestEffort(
+    if (entries.remove(id) == null) return false;
+    final written = await _writeCatalogBestEffort(
       namespaceId: namespaceId,
       encryptionKey: encryptionKey,
       entries: entries,
     );
+    if (written) return true;
+    try {
+      await storage.delete(_catalogPath(namespaceId));
+      return true;
+    } on PortableVaultStorageException {
+      return false;
+    }
   }
 
   Future<void> _requireAccess() async {
