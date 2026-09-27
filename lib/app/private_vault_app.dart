@@ -88,6 +88,8 @@ class _PrivateVaultAppState extends State<PrivateVaultApp>
   bool _manualUnlockSubmitting = false;
   final CalculatorUnlockAttemptController _unlockAttemptController =
       CalculatorUnlockAttemptController();
+  CalculatorUnlockAttempt? _activeCalculatorAttempt;
+  CalculatorUnlockAttemptState? _activeCalculatorState;
   late final SystemHandoffLifecycleCoordinator _handoffLifecycle;
 
   @override
@@ -257,11 +259,15 @@ class _PrivateVaultAppState extends State<PrivateVaultApp>
     }
   }
 
-  Future<void> _attemptCalculatorUnlock(CalculatorUnlockAttempt attempt) async {
+  Future<void> _startCalculatorUnlockPreflight(
+    CalculatorUnlockAttempt attempt,
+  ) async {
     if (!widget.lockController.isLocked) return;
 
     final state = _unlockAttemptController.tryBegin();
     if (state == null) return;
+    _activeCalculatorAttempt = attempt;
+    _activeCalculatorState = state;
     UnlockPerformanceTrace.mark('attempt_started', attemptId: state.id);
     Future<PreparedPinSession>? preparedFuture;
     PreparedPinSession? prepared;
@@ -308,6 +314,18 @@ class _PrivateVaultAppState extends State<PrivateVaultApp>
           !pinAccepted) {
         return;
       }
+
+      await state.thresholdFuture;
+      if (!mounted ||
+          !widget.lockController.isLocked ||
+          !_unlockAttemptController.isCurrent(state)) {
+        return;
+      }
+      UnlockPerformanceTrace.mark(
+        'threshold_observed',
+        attemptId: state.id,
+        fields: {'trigger': attempt.trigger.name},
+      );
 
       if (attempt.requiresBiometric) {
         final biometric = widget.biometricUnlock;
@@ -390,12 +408,23 @@ class _PrivateVaultAppState extends State<PrivateVaultApp>
         }
       }
       _unlockAttemptController.complete(state);
+      if (identical(_activeCalculatorState, state)) {
+        _activeCalculatorAttempt = null;
+        _activeCalculatorState = null;
+      }
     }
   }
 
+  void _onCalculatorUnlockThreshold(CalculatorUnlockAttempt attempt) {
+    final state = _activeCalculatorState;
+    if (!identical(_activeCalculatorAttempt, attempt) || state == null) return;
+    _unlockAttemptController.markThresholdReached(state);
+  }
+
   void _onCalculatorUnlockReleased(CalculatorUnlockTrigger trigger) {
-    if (trigger != CalculatorUnlockTrigger.equals) return;
-    final biometricWasStarted = _unlockAttemptController.cancelCurrent();
+    final biometricWasStarted = trigger == CalculatorUnlockTrigger.equals
+        ? _unlockAttemptController.cancelCurrent()
+        : _unlockAttemptController.cancelCurrentBeforeThreshold();
     final biometric = widget.biometricUnlock;
     if (biometricWasStarted && biometric != null) {
       unawaited(biometric.cancel());
@@ -608,8 +637,9 @@ class _PrivateVaultAppState extends State<PrivateVaultApp>
         pinLength: _calculatorPinLength,
         biometricMode: _settings.biometricsEnabled,
         holdDuration: Duration(milliseconds: _settings.unlockHoldMs),
-        onUnlockTriggered: (attempt) =>
-            unawaited(_attemptCalculatorUnlock(attempt)),
+        onUnlockStarted: (attempt) =>
+            unawaited(_startCalculatorUnlockPreflight(attempt)),
+        onUnlockTriggered: _onCalculatorUnlockThreshold,
         onUnlockReleased: _onCalculatorUnlockReleased,
       ),
       CoverKind.notes => NotesCover(

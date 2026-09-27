@@ -1,3 +1,5 @@
+import 'dart:async';
+
 enum CalculatorUnlockAttemptPhase {
   verifyingPin,
   checkingBiometrics,
@@ -13,8 +15,16 @@ class CalculatorUnlockAttemptState {
   CalculatorUnlockAttemptPhase phase =
       CalculatorUnlockAttemptPhase.verifyingPin;
 
+  final Completer<void> _thresholdReached = Completer<void>();
+
   bool get biometricStarted =>
       phase == CalculatorUnlockAttemptPhase.authenticating;
+  bool get thresholdReached => _thresholdReached.isCompleted;
+  Future<void> get thresholdFuture => _thresholdReached.future;
+
+  void markThresholdReached() {
+    if (!_thresholdReached.isCompleted) _thresholdReached.complete();
+  }
 
   bool get isTerminal =>
       phase == CalculatorUnlockAttemptPhase.cancelled ||
@@ -39,6 +49,12 @@ class CalculatorUnlockAttemptController {
     return identical(_current, state) && !state.isTerminal;
   }
 
+  bool markThresholdReached(CalculatorUnlockAttemptState state) {
+    if (!isCurrent(state)) return false;
+    state.markThresholdReached();
+    return true;
+  }
+
   bool beginBiometricCheck(CalculatorUnlockAttemptState state) {
     if (!isCurrent(state)) return false;
     state.phase = CalculatorUnlockAttemptPhase.checkingBiometrics;
@@ -51,10 +67,17 @@ class CalculatorUnlockAttemptController {
     return true;
   }
 
+  bool cancelCurrentBeforeThreshold() {
+    final state = _current;
+    if (state == null || state.thresholdReached) return false;
+    return cancelCurrent();
+  }
+
   bool cancelCurrent() {
     final state = _current;
     if (state == null) return false;
     final biometricStarted = state.biometricStarted;
+    state.markThresholdReached();
     state.phase = CalculatorUnlockAttemptPhase.cancelled;
     _current = null;
     return biometricStarted;
