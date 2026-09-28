@@ -217,6 +217,54 @@ void main() {
   );
 
   testWidgets(
+    'background after PIN threshold invalidates pending unlock and destroys prepared session',
+    (tester) async {
+      final lock = LockController();
+      final unlock = DeferredUnlockService();
+      final repository = DeferredPreparableRepository();
+      final prepared = TrackingPreparedSession();
+      await tester.pumpWidget(
+        PrivateVaultApp(
+          lockController: lock,
+          unlockService: unlock,
+          vaultRepository: repository,
+          initialSettings: const AppSettings.defaults().copyWith(
+            unlockHoldMs: 700,
+          ),
+        ),
+      );
+      await tester.pump();
+
+      for (final digit in '1123'.split('')) {
+        await tester.tap(find.byKey(Key('calculator-key-$digit')));
+      }
+      final trigger = find.byKey(const Key('calculator-key-1'));
+      final gesture = await tester.startGesture(tester.getCenter(trigger));
+      await tester.pump(const Duration(milliseconds: 700));
+
+      expect(unlock.verifyCalls, 1);
+      expect(repository.prepareCalls, 1);
+      expect(lock.isLocked, isTrue);
+
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.paused);
+      await tester.pump();
+
+      unlock.verification.complete(true);
+      repository.preparation.complete(prepared);
+      await tester.pumpAndSettle();
+
+      await gesture.up();
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+      await tester.pump();
+
+      expect(lock.isLocked, isTrue);
+      expect(repository.activateCalls, 0);
+      expect(repository.hasOpenSession, isFalse);
+      expect(prepared.destroyed, isTrue);
+    },
+  );
+
+  testWidgets(
     'biometric focus loss does not cancel the active equals attempt',
     (tester) async {
       final lock = LockController();

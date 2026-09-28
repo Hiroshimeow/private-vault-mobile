@@ -151,6 +151,15 @@ class _PrivateVaultAppState extends State<PrivateVaultApp>
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.paused ||
+        state == AppLifecycleState.hidden ||
+        state == AppLifecycleState.detached) {
+      final biometricWasStarted = _unlockAttemptController.cancelCurrent();
+      final biometric = widget.biometricUnlock;
+      if (biometricWasStarted && biometric != null) {
+        unawaited(biometric.cancel());
+      }
+    }
     _handoffLifecycle.handle(state);
   }
 
