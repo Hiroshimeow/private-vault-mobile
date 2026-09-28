@@ -32,7 +32,7 @@ Future<void> main() async {
   if (!await unlockService.isConfigured()) {
     await unlockService.configure('0000');
   }
-  final lockController = LockController();
+  final lockController = LockController(backgroundLock: false)..unlock();
 
   final PortableVaultTreeBridge? portableTree = Platform.isAndroid
       ? PortableVaultTreeBridge()
@@ -74,11 +74,9 @@ Future<void> main() async {
     saveExport: MediaVaultService.saveDeviceExport,
   );
   await media.purgePreviewPlaintext();
-  final panic = PanicSensorService(
-    lockController: lockController,
-    settings: settings,
-    samples: PanicSensorService.deviceSamples(),
-  )..start();
+  // Clone-lab branch: keep the secret workspace open during rapid clone testing.
+  // Security lifecycle/PIN behavior remains intact on production branches.
+  final PanicSensorService? panic = null;
   final vaultShuttle = Platform.isAndroid
       ? VaultShuttleService(
           repository: repository,
