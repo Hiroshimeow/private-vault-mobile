@@ -45,7 +45,7 @@ class PrivateVaultApp extends StatefulWidget {
     this.settingsStore,
     this.panicService,
     this.disguiseBridge,
-    this.workProfileClient,
+    WorkProfileClient? workProfileClient,
     this.cloneProfileClient,
     this.vaultShuttle,
     this.portableRootAccess,
@@ -62,7 +62,6 @@ class PrivateVaultApp extends StatefulWidget {
   final AppSettingsStore? settingsStore;
   final PanicSensorService? panicService;
   final PlatformDisguiseBridge? disguiseBridge;
-  final WorkProfileClient? workProfileClient;
   final CloneProfileClient? cloneProfileClient;
   final VaultShuttle? vaultShuttle;
   final PortableVaultRootAccess? portableRootAccess;
@@ -588,9 +587,7 @@ class _PrivateVaultAppState extends State<PrivateVaultApp>
             },
             settings: _settings,
             disguiseBridge: widget.disguiseBridge,
-            workProfileClient: widget.workProfileClient,
             cloneProfileClient: widget.cloneProfileClient,
-            vaultShuttle: widget.vaultShuttle,
             portableRootAccess: widget.portableRootAccess,
             legacyVaultMigration: widget.legacyVaultMigration,
             onSettingsChanged: (next) {
@@ -654,9 +651,7 @@ class SecretWorkspace extends StatefulWidget {
     this.disguiseBridge,
     this.portableRootAccess,
     this.legacyVaultMigration,
-    this.workProfileClient,
     this.cloneProfileClient,
-    this.vaultShuttle,
     this.vaultRepository,
     this.mediaService,
   });
@@ -671,9 +666,7 @@ class SecretWorkspace extends StatefulWidget {
   final PlatformDisguiseBridge? disguiseBridge;
   final PortableVaultRootAccess? portableRootAccess;
   final LegacyVaultMigrationService? legacyVaultMigration;
-  final WorkProfileClient? workProfileClient;
   final CloneProfileClient? cloneProfileClient;
-  final VaultShuttle? vaultShuttle;
   final VaultRepository? vaultRepository;
   final MediaVaultService? mediaService;
 
