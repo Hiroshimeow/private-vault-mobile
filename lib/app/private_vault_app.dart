@@ -8,8 +8,6 @@ import 'package:flutter/services.dart';
 import 'package:private_vault_mobile/app/private_vault_theme.dart';
 import 'package:private_vault_mobile/features/apps/clone_profile_client.dart';
 import 'package:private_vault_mobile/features/apps/clone_profile_home.dart';
-import 'package:private_vault_mobile/features/apps/vault_shuttle_service.dart';
-import 'package:private_vault_mobile/features/apps/work_profile_client.dart';
 import 'package:private_vault_mobile/features/auth/biometric_unlock.dart';
 import 'package:private_vault_mobile/features/auth/lock_controller.dart';
 import 'package:private_vault_mobile/features/auth/secure_unlock_service.dart';
@@ -45,9 +43,7 @@ class PrivateVaultApp extends StatefulWidget {
     this.settingsStore,
     this.panicService,
     this.disguiseBridge,
-    WorkProfileClient? workProfileClient,
     this.cloneProfileClient,
-    this.vaultShuttle,
     this.portableRootAccess,
     this.legacyVaultMigration,
     this.initialSettings = const AppSettings.defaults(),
@@ -63,7 +59,6 @@ class PrivateVaultApp extends StatefulWidget {
   final PanicSensorService? panicService;
   final PlatformDisguiseBridge? disguiseBridge;
   final CloneProfileClient? cloneProfileClient;
-  final VaultShuttle? vaultShuttle;
   final PortableVaultRootAccess? portableRootAccess;
   final LegacyVaultMigrationService? legacyVaultMigration;
   final AppSettings initialSettings;
@@ -139,10 +134,6 @@ class _PrivateVaultAppState extends State<PrivateVaultApp>
     final repository = widget.vaultRepository;
     if (repository is PinSessionVaultRepository) {
       repository.clearSession();
-    }
-    final shuttle = widget.vaultShuttle;
-    if (shuttle != null) {
-      unawaited(shuttle.purgeStagedPlaintext());
     }
   }
 

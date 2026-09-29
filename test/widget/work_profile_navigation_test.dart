@@ -2,8 +2,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:private_vault_mobile/app/private_vault_app.dart';
 import 'package:private_vault_mobile/features/apps/clone_profile_client.dart';
-import 'package:private_vault_mobile/features/apps/work_profile_client.dart';
-import 'package:private_vault_mobile/features/apps/work_profile_models.dart';
 import 'package:private_vault_mobile/features/auth/lock_controller.dart';
 
 class _UnlockService implements UnlockService {
@@ -17,70 +15,6 @@ class _UnlockService implements UnlockService {
   Future<bool> verify(String candidate) async => true;
 }
 
-class _FakeWorkProfileClient implements WorkProfileClient {
-  int capabilityCalls = 0;
-  int listCalls = 0;
-
-  @override
-  Future<WorkProfileCapability> getCapability() async {
-    capabilityCalls += 1;
-    return const WorkProfileCapability(
-      supported: true,
-      provisioningAllowed: true,
-      profileState: WorkProfileState.absent,
-    );
-  }
-
-  @override
-  Future<List<ManagedAppState>> listApps() async {
-    listCalls += 1;
-    return const [];
-  }
-
-  @override
-  Future<WorkProfileOperationResult> startProvisioning() async =>
-      const WorkProfileOperationResult.success();
-
-  @override
-  Future<WorkProfileOperationResult> requestQuietModeDisabled() async =>
-      const WorkProfileOperationResult.success();
-
-  @override
-  Future<PickedWorkDocument?> pickWorkDocument() async => null;
-
-  @override
-  Future<WorkProfileOperationResult> openStore(String packageName) async =>
-      const WorkProfileOperationResult.success();
-
-  @override
-  Future<WorkProfileOperationResult> clone(String packageName) async =>
-      const WorkProfileOperationResult.success();
-
-  @override
-  Future<WorkProfileOperationResult> launch(String packageName) async =>
-      const WorkProfileOperationResult.success();
-
-  @override
-  Future<WorkProfileOperationResult> setSuspended(
-    String packageName,
-    bool suspended,
-  ) async => const WorkProfileOperationResult.success();
-
-  @override
-  Future<WorkProfileOperationResult> setHidden(
-    String packageName,
-    bool hidden,
-  ) async => const WorkProfileOperationResult.success();
-
-  @override
-  Future<WorkProfileOperationResult> uninstall(String packageName) async =>
-      const WorkProfileOperationResult.success();
-
-  @override
-  Future<WorkProfileOperationResult> destroyProfile() async =>
-      const WorkProfileOperationResult.success();
-}
-
 void main() {
   testWidgets('Android workspace promotes Apps before Browser after unlock', (
     tester,
@@ -90,7 +24,6 @@ void main() {
       PrivateVaultApp(
         lockController: lock,
         unlockService: _UnlockService(),
-        workProfileClient: _FakeWorkProfileClient(),
         cloneProfileClient: const UnavailableCloneProfileClient(),
       ),
     );
@@ -107,19 +40,16 @@ void main() {
   testWidgets('locked cover exposes no Apps or package inventory UI', (
     tester,
   ) async {
-    final client = _FakeWorkProfileClient();
     await tester.pumpWidget(
       PrivateVaultApp(
         lockController: LockController(),
         unlockService: _UnlockService(),
-        workProfileClient: client,
+        cloneProfileClient: const UnavailableCloneProfileClient(),
       ),
     );
 
-    expect(client.capabilityCalls, 0);
-    expect(client.listCalls, 0);
     expect(find.text('Apps'), findsNothing);
-    expect(find.textContaining('work profile'), findsNothing);
+    expect(find.textContaining('clone profile'), findsNothing);
     expect(find.byIcon(Icons.apps), findsNothing);
   });
 }

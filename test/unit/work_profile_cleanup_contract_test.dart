@@ -11,31 +11,33 @@ void main() {
     final activity = await File(
       'android/app/src/main/kotlin/io/hiroshimeow/private_vault_mobile/MainActivity.kt',
     ).readAsString();
-    final client = await File('lib/features/apps/work_profile_client.dart')
-        .readAsString();
-    final shuttle = await File('lib/features/apps/vault_shuttle_service.dart')
-        .readAsString();
-
     expect(main, isNot(contains('PigeonWorkProfileClient')));
     expect(main, isNot(contains('VaultShuttleService(')));
     expect(main, isNot(contains('PigeonVaultShuttleBridge')));
-    expect(app, isNot(contains('workProfileClient: widget.workProfileClient')));
-    expect(app, isNot(contains('final WorkProfileClient? workProfileClient;')));
-    expect(app, isNot(contains('vaultShuttle: widget.vaultShuttle')));
-    expect(client, isNot(contains('generated/work_profile_api.g.dart')));
-    expect(client, isNot(contains('class PigeonWorkProfileClient')));
-    expect(shuttle, isNot(contains('generated/work_profile_api.g.dart')));
-    expect(shuttle, isNot(contains('class PigeonVaultShuttleBridge')));
-    expect(shuttle, isNot(contains('class VaultShuttleService')));
+    expect(app, isNot(contains('WorkProfileClient')));
+    expect(app, isNot(contains('workProfileClient')));
+    expect(app, isNot(contains('VaultShuttle')));
+    expect(app, isNot(contains('vaultShuttle')));
 
     expect(manifest, isNot(contains('PrivateVaultDeviceAdminReceiver')));
     expect(manifest, isNot(contains('WorkProfile')));
     expect(manifest, isNot(contains('VaultShuttleProvider')));
+    expect(
+      manifest,
+      isNot(contains('android.permission.REQUEST_INSTALL_PACKAGES')),
+    );
+    expect(
+      manifest,
+      isNot(contains('android.permission.REQUEST_DELETE_PACKAGES')),
+    );
     expect(activity, isNot(contains('WorkProfileHostApi')));
     expect(activity, isNot(contains('workProfileApiAdapter')));
 
     for (final path in <String>[
+      'lib/features/apps/work_profile_client.dart',
+      'lib/features/apps/work_profile_models.dart',
       'lib/features/apps/work_profile_home.dart',
+      'lib/features/apps/vault_shuttle_service.dart',
       'lib/platform/generated/work_profile_api.g.dart',
       'pigeons/work_profile_api.dart',
       'android/app/src/main/kotlin/io/hiroshimeow/private_vault_mobile/WorkProfileApi.g.kt',
