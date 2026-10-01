@@ -23,17 +23,17 @@ A local-first Flutter privacy utility for Android and iOS. This is an original i
 
 ## V1.2 — Android isolated apps
 
-Android now treats native app isolation as the primary multi-session path. Private Vault provisions an official **managed Work Profile**, acts as its Profile Owner DPC, and exposes typed controls through a generated Pigeon bridge. Personal and work-profile package state are queried in their owning profiles rather than merged at the OS boundary.
+Android native app isolation uses the platform `android.os.usertype.profile.CLONE` user type when the OEM exposes it. Private Vault requests the required privileged operations through an allowlisted Shizuku UserService; it does **not** provision or reuse a managed Work Profile.
 
-- Eligible system apps use the supported DPC system-app enable path.
-- Ordinary apps transfer the selected package's **base + split APKs** through temporary read-only content URIs into one work-profile `PackageInstaller` session.
-- Android may require install-source/package confirmation. OEM refusal is surfaced; Play/OEM-store install or Browser mode is the fallback. There is no silent-install claim.
-- Work copies can be opened, frozen/unfrozen, hidden/unhidden where Android permits, or uninstalled from the work profile without uninstalling the personal copy.
-- Removing the work profile is destructive and deletes its apps, accounts, and data only after an explicit confirmation.
-- App data/accounts/login sessions are **not copied** from the personal installation.
-- Locking Private Vault does not stop an already-running work-profile app; use Freeze for that separate policy action.
-- iOS has no Work Profile equivalent and is not presented as having native app cloning.
-- This is an independent Android-API implementation. No Shelter/Insular GPL source is vendored or copied.
+- Clone-profile creation is explicit and scoped to the current Android parent user.
+- Package list/install/launch/uninstall operations always include the proven clone user id.
+- Private Vault stores only the clone user id that it created. An existing OEM/third-party clone profile is treated as a conflict and is never adopted, modified, or removed.
+- A cloned package starts with separate private app data for that Android user. Private Vault does not claim complete storage isolation because clone-profile shared-storage behavior can vary by Android/OEM implementation.
+- If Shizuku is unavailable or not authorized, the Apps surface reports `privilege_required`; there is no managed-Work-Profile fallback.
+- If the OEM explicitly rejects or omits the CLONE user type, the Apps surface reports `clone_profile_unsupported_by_oem`. Policy/capacity/ambiguous create failures remain generic operation failures.
+- Locking Private Vault does not stop an already-running cloned app outside the Flutter process.
+- iOS has no Android clone-profile equivalent and is not presented as having native app cloning.
+- This is an independent Android implementation. No Shelter/Insular GPL source is vendored or copied.
 
 ## Security posture
 
@@ -52,11 +52,11 @@ See [SECURITY.md](SECURITY.md) and [docs/design/THREAT_MODEL.md](docs/design/THR
 
 ## Important platform limits
 
-### Android Work Profile
+### Android Clone Profile
 
-Managed-profile isolation depends on Android framework enforcement, the OEM, PackageInstaller, and DPC policy. A device with an incompatible employer/other-DPC profile may refuse provisioning. APK-copy installation can require explicit user authorization for the install source/package. Build/unit tests do not by themselves prove managed-profile E2E behavior; runtime claims require an emulator or physical device that actually provisions the profile.
+Clone-profile behavior depends on Android framework enforcement, the OEM implementation of `profile.CLONE`, and an authorized Shizuku service. Build/unit tests do not by themselves prove clone-profile E2E behavior; runtime claims require a legal emulator or physical-device target that actually exposes the CLONE user type.
 
-Private Vault requests launcher-intent package visibility rather than `QUERY_ALL_PACKAGES`. `REQUEST_INSTALL_PACKAGES` and `REQUEST_DELETE_PACKAGES` are used only for the explicit clone/install and work-only uninstall flows.
+Private Vault requests launcher-intent package visibility rather than `QUERY_ALL_PACKAGES`. Privileged package operations are fixed and user-scoped; the app does not expose arbitrary shell execution.
 
 ### Browser profiles
 
@@ -87,7 +87,7 @@ lib/
     crypto/            authenticated encryption
     storage/           platform secure-storage abstraction
   features/
-    apps/              Android Work Profile contract, client, isolated-app UI
+    apps/              Android Clone/Shizuku contract, client, isolated-app UI
     auth/              PIN, biometric, lock lifecycle
     browser/           WebView fallback, ephemeral profile policy, download-to-vault
     cover/             Calculator and Notes/Todo covers
@@ -95,7 +95,7 @@ lib/
     panic/             sensor normalization and trigger policy
     settings/          persisted non-secret settings
     vault/             encrypted repository and vault UI
-  platform/            generated Work Profile API + launcher/alternate-icon bridge
+  platform/            platform bridge wrappers + launcher/alternate-icon bridge
 ```
 
 The UI depends on explicit feature/repository interfaces. Platform plugins are wrapped so security-critical policy is unit-testable without device state.
@@ -167,7 +167,7 @@ Installing on a device or publishing to the App Store requires normal Apple sign
 `.github/workflows/ci.yml` runs on pushes to `main`, pull requests, and manual dispatch:
 
 - Linux: dependency resolution, format gate, `flutter analyze`, full tests, security-contract tests.
-- Android: Java 17, generated/native DPC code compilation through the APK builds, debug APK build, release APK compile smoke, debug APK artifact upload.
+- Android: Java 17, native bridge code compilation through the APK builds, debug APK build, release APK compile smoke, debug APK artifact upload.
 - iOS/macOS: release build with `--no-codesign`.
 
 Flutter SDK and pub caches use the Flutter Action's maintained GitHub cache integration.
@@ -182,7 +182,7 @@ Flutter SDK and pub caches use the Flutter Action's maintained GitHub cache inte
 - [Architecture](docs/design/ARCHITECTURE.md)
 - [Threat model](docs/design/THREAT_MODEL.md)
 - [UX flows](docs/design/UX_FLOWS.md)
-- [Android Work Profile device checklist](docs/testing/WORK_PROFILE_DEVICE_CHECKLIST.md)
+- [Android Clone Profile device checklist](docs/testing/CLONE_PROFILE_DEVICE_CHECKLIST.md)
 - [Implementation plan](docs/plan/IMPLEMENTATION_PLAN.md)
 - [Security policy](SECURITY.md)
 

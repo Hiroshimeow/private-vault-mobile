@@ -124,4 +124,109 @@ class CloneProfileDiscoveryTest {
             result.packages,
         )
     }
+
+    @Test
+    fun explicitCloneTypeUnsupportedIsClassifiedAsOemUnsupported() {
+        assertEquals(
+            CloneProfileCreatePolicy.FailureState.cloneProfileUnsupportedByOem,
+            CloneProfileCreatePolicy.classifyFailure(
+                "",
+                "User type android.os.usertype.profile.CLONE is not available on this device",
+            ),
+        )
+        assertEquals(
+            CloneProfileCreatePolicy.FailureState.cloneProfileUnsupportedByOem,
+            CloneProfileCreatePolicy.classifyFailure(
+                "",
+                "Unknown user type: android.os.usertype.profile.CLONE",
+            ),
+        )
+    }
+
+    @Test
+    fun genericCannotAddFailureIsNotMisclassifiedAsOemUnsupported() {
+        assertEquals(
+            CloneProfileCreatePolicy.FailureState.operationFailed,
+            CloneProfileCreatePolicy.classifyFailure(
+                "",
+                "Error: couldn't create User. Cannot add user. No more users allowed.",
+            ),
+        )
+        assertEquals(
+            CloneProfileCreatePolicy.FailureState.operationFailed,
+            CloneProfileCreatePolicy.classifyFailure(
+                "",
+                "Cannot add profile of type android.os.usertype.profile.CLONE due to policy",
+            ),
+        )
+    }
+
+    @Test
+    fun createdCloneProofRequiresMatchingCreateIdAndSinglePostCreateClone() {
+        val result = CloneProfileCreatePolicy.verifyCreatedClone(
+            createStdout = "Success: created user id 10",
+            postCreateUsers = """
+                0: id=0, name=Owner, type=FULL.SYSTEM, flags=ADMIN|FULL
+                1: id=10, name=PrivateVaultClone, type=profile.CLONE, flags=PROFILE (parentId=0)
+            """.trimIndent(),
+        )
+
+        assertEquals(CloneProfileDiscovery.State.ready, result.state)
+        assertEquals(10, result.userId)
+    }
+
+    @Test
+    fun createdCloneProofRejectsMissingOrMismatchedCreateIdentity() {
+        val oneClone = """
+            0: id=0, name=Owner, type=FULL.SYSTEM, flags=ADMIN|FULL
+            1: id=10, name=PrivateVaultClone, type=profile.CLONE, flags=PROFILE (parentId=0)
+        """.trimIndent()
+
+        val missingCreateId = CloneProfileCreatePolicy.verifyCreatedClone(
+            createStdout = "Success",
+            postCreateUsers = oneClone,
+        )
+        assertEquals(CloneProfileDiscovery.State.operationFailed, missingCreateId.state)
+
+        val mismatchedCreateId = CloneProfileCreatePolicy.verifyCreatedClone(
+            createStdout = "Success: created user id 11",
+            postCreateUsers = oneClone,
+        )
+        assertEquals(CloneProfileDiscovery.State.conflicting, mismatchedCreateId.state)
+    }
+
+    @Test
+    fun createdCloneProofRejectsMultiplePostCreateCloneProfiles() {
+        val result = CloneProfileCreatePolicy.verifyCreatedClone(
+            createStdout = "Success: created user id 10",
+            postCreateUsers = """
+                1: id=10, name=PrivateVaultClone, type=profile.CLONE, flags=PROFILE (parentId=0)
+                2: id=11, name=OtherClone, type=profile.CLONE, flags=PROFILE (parentId=0)
+            """.trimIndent(),
+        )
+
+        assertEquals(CloneProfileDiscovery.State.conflicting, result.state)
+    }
+
+    @Test
+    fun failedStartUserReturnsBoundedFailureAndSuccessfulStartDoesNot() {
+        val huge = "x".repeat(5000)
+        val failure = CloneProfileStartPolicy.failureMessage(
+            exitCode = 1,
+            stdout = huge,
+            stderr = "start denied",
+        )
+
+        assertTrue(failure != null)
+        assertTrue(failure!!.contains("start denied"))
+        assertTrue(failure.length <= 2048)
+        assertEquals(
+            null,
+            CloneProfileStartPolicy.failureMessage(
+                exitCode = 0,
+                stdout = "Success",
+                stderr = "",
+            ),
+        )
+    }
 }
