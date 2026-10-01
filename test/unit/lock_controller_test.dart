@@ -59,4 +59,15 @@ void main() {
       expect(lock.isLocked, isTrue);
     });
   });
+
+  test(
+    'background invalidates auth generation even when auto-lock is disabled',
+    () {
+      final lock = LockController(backgroundLock: false)..unlock();
+      final before = lock.unlockGeneration;
+      lock.onBackground();
+      expect(lock.isLocked, isFalse);
+      expect(lock.unlockGeneration, before + 1);
+    },
+  );
 }

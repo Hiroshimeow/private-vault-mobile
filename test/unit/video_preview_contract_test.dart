@@ -12,12 +12,13 @@ void main() {
     final pubspec = File('pubspec.yaml').readAsStringSync();
 
     expect(pubspec, contains('video_player:'));
-    expect(media, contains("getTemporaryDirectory()"));
+    expect(media, contains('temporaryDirectory ?? getTemporaryDirectory'));
+    expect(media, contains('_temporaryDirectory()'));
     expect(media, contains("private-vault-preview"));
     expect(media, contains('purgePreviewPlaintext'));
     expect(vault, contains('VideoPlayerController.file'));
     expect(vault, contains("Key('vault-video-play-pause')"));
     expect(app, contains('unawaited(media.purgePreviewPlaintext())'));
-    expect(main, contains('await media.purgePreviewPlaintext()'));
+    expect(main, contains("stages.run('preview_cleanup', media.purgePreviewPlaintextStrict)"));
   });
 }

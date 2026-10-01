@@ -110,6 +110,7 @@ class _PrivateVaultAppState extends State<PrivateVaultApp>
             ? CoverKind.notes
             : CoverKind.calculator);
     WidgetsBinding.instance.addObserver(this);
+    widget.panicService?.start();
     unawaited(_refreshCalculatorPinLength());
   }
 
@@ -262,17 +263,19 @@ class _PrivateVaultAppState extends State<PrivateVaultApp>
 
     final state = _unlockAttemptController.tryBegin();
     if (state == null) return;
+    final lifecycleGeneration = widget.lockController.unlockGeneration;
+    bool attemptIsFresh() =>
+        mounted &&
+        widget.lockController.isLocked &&
+        widget.lockController.unlockGeneration == lifecycleGeneration &&
+        _unlockAttemptController.isCurrent(state);
     UnlockPerformanceTrace.mark('attempt_started', attemptId: state.id);
     Future<PreparedPinSession>? preparedFuture;
     PreparedPinSession? prepared;
     var preparedActivated = false;
     try {
       final configuredLength = await _configuredPinLength();
-      if (!mounted ||
-          !widget.lockController.isLocked ||
-          !_unlockAttemptController.isCurrent(state)) {
-        return;
-      }
+      if (!attemptIsFresh()) return;
       if (configuredLength == null ||
           attempt.candidate.length != configuredLength) {
         return;
@@ -302,12 +305,7 @@ class _PrivateVaultAppState extends State<PrivateVaultApp>
         attemptId: state.id,
         fields: {'accepted': pinAccepted},
       );
-      if (!mounted ||
-          !widget.lockController.isLocked ||
-          !_unlockAttemptController.isCurrent(state) ||
-          !pinAccepted) {
-        return;
-      }
+      if (!attemptIsFresh() || !pinAccepted) return;
 
       if (attempt.requiresBiometric) {
         final biometric = widget.biometricUnlock;
@@ -315,25 +313,14 @@ class _PrivateVaultAppState extends State<PrivateVaultApp>
         if (!_unlockAttemptController.beginBiometricCheck(state)) return;
 
         final available = await biometric.isAvailable();
-        if (!mounted ||
-            !widget.lockController.isLocked ||
-            !_unlockAttemptController.isCurrent(state) ||
-            !available) {
-          return;
-        }
+        if (!attemptIsFresh() || !available) return;
 
         if (!_unlockAttemptController.markBiometricStarted(state)) return;
         final biometricAccepted = await biometric.authenticate();
-        if (!mounted ||
-            !widget.lockController.isLocked ||
-            !_unlockAttemptController.isCurrent(state) ||
-            !biometricAccepted) {
-          return;
-        }
+        if (!attemptIsFresh() || !biometricAccepted) return;
       }
 
-      if (_unlockAttemptController.isCurrent(state) &&
-          widget.lockController.isLocked) {
+      if (attemptIsFresh()) {
         late final int sessionGeneration;
         final pendingPrepared = preparedFuture;
         if (repository is PreparablePinSessionVaultRepository &&
@@ -343,11 +330,7 @@ class _PrivateVaultAppState extends State<PrivateVaultApp>
           } on Object {
             return;
           }
-          if (!mounted ||
-              !_unlockAttemptController.isCurrent(state) ||
-              !widget.lockController.isLocked) {
-            return;
-          }
+          if (!attemptIsFresh()) return;
           try {
             sessionGeneration = repository.activatePreparedSession(prepared);
             preparedActivated = true;
@@ -359,8 +342,7 @@ class _PrivateVaultAppState extends State<PrivateVaultApp>
           if (openedGeneration == null) return;
           sessionGeneration = openedGeneration;
         }
-        if (!_unlockAttemptController.isCurrent(state) ||
-            !widget.lockController.isLocked) {
+        if (!attemptIsFresh()) {
           _clearVaultSessionIfOwned(sessionGeneration);
           return;
         }
@@ -402,15 +384,26 @@ class _PrivateVaultAppState extends State<PrivateVaultApp>
     }
   }
 
+  bool _manualUnlockIsFresh(int generation) =>
+      mounted &&
+      widget.lockController.isLocked &&
+      widget.lockController.unlockGeneration == generation;
+
   Future<void> _requestUnlock(BuildContext materialContext) async {
+    final requestGeneration = widget.lockController.unlockGeneration;
     final configured = await widget.unlockService.isConfigured();
-    if (!mounted || !materialContext.mounted) return;
+    if (!materialContext.mounted || !_manualUnlockIsFresh(requestGeneration)) {
+      return;
+    }
 
     var biometricAvailable = false;
     final biometric = widget.biometricUnlock;
     if (_settings.biometricsEnabled && biometric != null) {
       biometricAvailable = await biometric.isAvailable();
-      if (!mounted || !materialContext.mounted) return;
+      if (!materialContext.mounted ||
+          !_manualUnlockIsFresh(requestGeneration)) {
+        return;
+      }
     }
 
     var pin = '';
@@ -425,11 +418,15 @@ class _PrivateVaultAppState extends State<PrivateVaultApp>
             Future<void> submit() async {
               if (_manualUnlockSubmitting) return;
               _manualUnlockSubmitting = true;
+              final attemptGeneration = widget.lockController.unlockGeneration;
               try {
                 final candidate = pin;
                 if (configured) {
                   final accepted = await widget.unlockService.verify(candidate);
-                  if (!sheetContext.mounted) return;
+                  if (!sheetContext.mounted ||
+                      !_manualUnlockIsFresh(attemptGeneration)) {
+                    return;
+                  }
                   if (!accepted) {
                     setSheetState(() => error = 'PIN not accepted');
                     return;
@@ -437,6 +434,10 @@ class _PrivateVaultAppState extends State<PrivateVaultApp>
                 } else {
                   try {
                     await widget.unlockService.configure(candidate);
+                    if (!sheetContext.mounted ||
+                        !_manualUnlockIsFresh(attemptGeneration)) {
+                      return;
+                    }
                     _pinLengthFuture = null;
                   } on Object {
                     if (!sheetContext.mounted) return;
@@ -454,7 +455,10 @@ class _PrivateVaultAppState extends State<PrivateVaultApp>
                     return;
                   }
                   final biometricAccepted = await biometric.authenticate();
-                  if (!sheetContext.mounted) return;
+                  if (!sheetContext.mounted ||
+                      !_manualUnlockIsFresh(attemptGeneration)) {
+                    return;
+                  }
                   if (!biometricAccepted) {
                     setSheetState(
                       () => error = 'Biometric unlock not accepted',
@@ -463,14 +467,18 @@ class _PrivateVaultAppState extends State<PrivateVaultApp>
                   }
                 }
 
-                if (!sheetContext.mounted) return;
+                if (!sheetContext.mounted ||
+                    !_manualUnlockIsFresh(attemptGeneration)) {
+                  return;
+                }
                 final sessionGeneration = await _openVaultSession(candidate);
                 if (sessionGeneration == null) {
                   if (!sheetContext.mounted) return;
                   setSheetState(() => error = 'Protected storage unavailable');
                   return;
                 }
-                if (!sheetContext.mounted || !widget.lockController.isLocked) {
+                if (!sheetContext.mounted ||
+                    !_manualUnlockIsFresh(attemptGeneration)) {
                   _clearVaultSessionIfOwned(sessionGeneration);
                   return;
                 }

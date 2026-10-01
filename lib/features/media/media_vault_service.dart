@@ -74,6 +74,7 @@ class VaultImportBatchResult {
 typedef PickVaultData = Future<PickedVaultData?> Function();
 typedef PickVaultSourceList = Future<List<PickedVaultSource>> Function();
 typedef SaveExport = Future<bool> Function(String fileName, Uint8List bytes);
+typedef TemporaryDirectoryProvider = Future<Directory> Function();
 typedef VaultImportProgressCallback = void Function(
   VaultImportProgress progress,
 );
@@ -87,12 +88,14 @@ class MediaVaultService {
     required PickVaultData capturePhoto,
     required SaveExport saveExport,
     PickVaultSourceList? pickImports,
+    TemporaryDirectoryProvider? temporaryDirectory,
   }) => MediaVaultService._(
     repository,
     pickImport,
     capturePhoto,
     saveExport,
     pickImports,
+    temporaryDirectory ?? getTemporaryDirectory,
   );
 
   MediaVaultService._(
@@ -101,6 +104,7 @@ class MediaVaultService {
     this._capturePhoto,
     this._saveExport,
     this._pickImports,
+    this._temporaryDirectory,
   );
 
   final VaultRepository _repository;
@@ -108,6 +112,7 @@ class MediaVaultService {
   final PickVaultData _capturePhoto;
   final SaveExport _saveExport;
   final PickVaultSourceList? _pickImports;
+  final TemporaryDirectoryProvider _temporaryDirectory;
 
   Future<VaultItem?> importFile() async {
     final picked = await _pickImport();
@@ -242,7 +247,7 @@ class MediaVaultService {
     if (item.kind != VaultItemKind.video) {
       throw ArgumentError.value(item.kind, 'item.kind', 'video required');
     }
-    final temporary = await getTemporaryDirectory();
+    final temporary = await _temporaryDirectory();
     final directory = Directory(p.join(temporary.path, _previewDirectoryName));
     await directory.create(recursive: true);
     final file = File(p.join(directory.path, '${item.id}.video'));
@@ -260,15 +265,17 @@ class MediaVaultService {
     }
   }
 
+  Future<void> purgePreviewPlaintextStrict() async {
+    final temporary = await _temporaryDirectory();
+    final directory = Directory(p.join(temporary.path, _previewDirectoryName));
+    if (await directory.exists()) {
+      await directory.delete(recursive: true);
+    }
+  }
+
   Future<void> purgePreviewPlaintext() async {
     try {
-      final temporary = await getTemporaryDirectory();
-      final directory = Directory(
-        p.join(temporary.path, _previewDirectoryName),
-      );
-      if (await directory.exists()) {
-        await directory.delete(recursive: true);
-      }
+      await purgePreviewPlaintextStrict();
     } on Object {
       // Keep lock/disposal paths fail-safe when platform storage is unavailable.
     }

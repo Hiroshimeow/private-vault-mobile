@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 import 'package:private_vault_mobile/app/private_vault_app.dart';
+import 'package:private_vault_mobile/app/startup_bootstrap.dart';
 import 'package:private_vault_mobile/core/crypto/vault_crypto.dart';
 import 'package:private_vault_mobile/core/storage/secret_store.dart';
 import 'package:private_vault_mobile/features/apps/clone_profile_client.dart';
@@ -22,15 +23,26 @@ import 'package:private_vault_mobile/features/vault/vault_repository.dart';
 import 'package:private_vault_mobile/platform/disguise_bridge.dart';
 import 'package:private_vault_mobile/platform/portable_vault_tree_bridge.dart';
 
-Future<void> main() async {
+void main() {
   WidgetsFlutterBinding.ensureInitialized();
+  runApp(StartupBootstrap(initialize: _initializePrivateVault));
+}
 
+Future<Widget> _initializePrivateVault() async {
+  const stages = StartupStageRunner();
   final settingsStore = AppSettingsStore(SharedPreferencesSettingsStorage());
-  final settings = await settingsStore.load();
+  final settings = await stages.run('settings_load', settingsStore.load);
   final secrets = FlutterSecureSecretStore();
   final unlockService = SecureUnlockService(store: secrets);
-  if (!await unlockService.isConfigured()) {
-    await unlockService.configure('0000');
+  final configured = await stages.run(
+    'secure_store_read',
+    unlockService.isConfigured,
+  );
+  if (!configured) {
+    await stages.run(
+      'default_pin_write',
+      () => unlockService.configure('0000'),
+    );
   }
   final lockController = LockController();
 
@@ -73,12 +85,7 @@ Future<void> main() async {
     capturePhoto: MediaVaultService.captureDevicePhoto,
     saveExport: MediaVaultService.saveDeviceExport,
   );
-  await media.purgePreviewPlaintext();
-  final panic = PanicSensorService(
-    lockController: lockController,
-    settings: settings,
-    samples: PanicSensorService.deviceSamples(),
-  )..start();
+  await stages.run('preview_cleanup', media.purgePreviewPlaintextStrict);
   final vaultShuttle = Platform.isAndroid
       ? VaultShuttleService(
           repository: repository,
@@ -87,29 +94,33 @@ Future<void> main() async {
         )
       : null;
   if (vaultShuttle != null) {
-    await vaultShuttle.purgeStagedPlaintext();
+    await stages.run('staged_cleanup', vaultShuttle.purgeStagedPlaintext);
   }
 
-  runApp(
-    PrivateVaultApp(
-      lockController: lockController,
-      unlockService: unlockService,
-      biometricUnlock: DeviceBiometricUnlock(),
-      vaultRepository: repository,
-      mediaService: media,
-      settingsStore: settingsStore,
-      panicService: panic,
-      disguiseBridge: PlatformDisguiseBridge(),
-      portableRootAccess: portableTree,
-      legacyVaultMigration: legacyVaultMigration,
-      workProfileClient: Platform.isAndroid
-          ? PigeonWorkProfileClient()
-          : const UnavailableWorkProfileClient(),
-      cloneProfileClient: Platform.isAndroid
-          ? PlatformCloneProfileClient()
-          : const UnavailableCloneProfileClient(),
-      vaultShuttle: vaultShuttle,
-      initialSettings: settings,
-    ),
+  final panic = PanicSensorService(
+    lockController: lockController,
+    settings: settings,
+    samples: PanicSensorService.deviceSamples(),
+  );
+
+  return PrivateVaultApp(
+    lockController: lockController,
+    unlockService: unlockService,
+    biometricUnlock: DeviceBiometricUnlock(),
+    vaultRepository: repository,
+    mediaService: media,
+    settingsStore: settingsStore,
+    panicService: panic,
+    disguiseBridge: PlatformDisguiseBridge(),
+    portableRootAccess: portableTree,
+    legacyVaultMigration: legacyVaultMigration,
+    workProfileClient: Platform.isAndroid
+        ? PigeonWorkProfileClient()
+        : const UnavailableWorkProfileClient(),
+    cloneProfileClient: Platform.isAndroid
+        ? PlatformCloneProfileClient()
+        : const UnavailableCloneProfileClient(),
+    vaultShuttle: vaultShuttle,
+    initialSettings: settings,
   );
 }
