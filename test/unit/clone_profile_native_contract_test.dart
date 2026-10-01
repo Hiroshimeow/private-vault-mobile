@@ -50,9 +50,26 @@ void main() {
         'android/app/src/main/java/io/hiroshimeow/private_vault_mobile/CloneProfileUserService.java',
       ).readAsString();
       final gradle = await File('android/app/build.gradle.kts').readAsString();
+      final manifest = await File('android/app/src/main/AndroidManifest.xml')
+          .readAsString();
 
       expect(gradle, contains('dev.rikka.shizuku:api:13.1.5'));
       expect(gradle, contains('dev.rikka.shizuku:provider:13.1.5'));
+      expect(
+        manifest,
+        contains('android:name="rikka.shizuku.ShizukuProvider"'),
+      );
+      expect(
+        manifest,
+        contains('android:authorities="\${applicationId}.shizuku"'),
+      );
+      expect(manifest, contains('android:exported="true"'));
+      expect(
+        manifest,
+        contains(
+          'android:permission="android.permission.INTERACT_ACROSS_USERS_FULL"',
+        ),
+      );
       expect(bridge, contains('Shizuku.UserServiceArgs'));
       expect(bridge, contains('conflicting_external_clone_profile'));
       expect(bridge, contains('KEY_OWNED_CLONE_USER'));
