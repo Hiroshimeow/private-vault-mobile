@@ -89,6 +89,7 @@ class MediaVaultService {
     required SaveExport saveExport,
     PickVaultSourceList? pickImports,
     TemporaryDirectoryProvider? temporaryDirectory,
+    VaultOperationRecorder? operationRecorder,
   }) => MediaVaultService._(
     repository,
     pickImport,
@@ -96,6 +97,7 @@ class MediaVaultService {
     saveExport,
     pickImports,
     temporaryDirectory ?? getTemporaryDirectory,
+    operationRecorder,
   );
 
   MediaVaultService._(
@@ -105,6 +107,7 @@ class MediaVaultService {
     this._saveExport,
     this._pickImports,
     this._temporaryDirectory,
+    this._operationRecorder,
   );
 
   final VaultRepository _repository;
@@ -113,6 +116,7 @@ class MediaVaultService {
   final SaveExport _saveExport;
   final PickVaultSourceList? _pickImports;
   final TemporaryDirectoryProvider _temporaryDirectory;
+  final VaultOperationRecorder? _operationRecorder;
 
   Future<VaultItem?> importFile() async {
     final picked = await _pickImport();
@@ -218,9 +222,10 @@ class MediaVaultService {
       return;
     }
     try {
+      _operationRecorder?.call(VaultOperation.thumbnailBuild);
       final thumbnail = await buildThumbnail();
       if (thumbnail != null && thumbnail.isNotEmpty) {
-        await repository.writeThumbnail(item.id, thumbnail);
+        await repository.writeThumbnailForAuthenticatedItem(item, thumbnail);
       }
     } on Object {
       // Thumbnail data is a reconstructible cache; import success is authoritative.

@@ -47,6 +47,14 @@ void main() {
     );
   }
 
+  File catalogFile(PortableVaultRepository repo) {
+    final material = repo.session.requireMaterial();
+    return File(
+      '${root.path}${Platform.pathSeparator}${material.namespaceId}'
+      '${Platform.pathSeparator}catalog.pvc',
+    );
+  }
+
   test(
     'same PIN reopens authoritative payload without metadata sidecar',
     () async {
@@ -96,26 +104,429 @@ void main() {
     expect(changed.corruptCount, 1);
     expect(storage.reads.where((path) => path.endsWith('.pvb')), isNotEmpty);
   });
-  test('SAF-style zero mtime still avoids unchanged payload rereads', () async {
+  test('SAF zero mtime stays fast and invalidates catalog on authenticated failure', () async {
     final session = PortableVaultSession();
     await session.open('0000');
     final storage = _RecordingPortableVaultStorage(
       DirectoryPortableVaultStorage(() async => root),
       suppressModifiedAt: true,
     );
-    final repo = PortableVaultRepository(storage: storage, session: session);
+    final operations = <VaultOperation, int>{};
+    final repo = PortableVaultRepository(
+      storage: storage,
+      session: session,
+      operationRecorder: (operation) =>
+          operations.update(operation, (count) => count + 1, ifAbsent: () => 1),
+    );
     final added = await repo.addBytes(
       Uint8List.fromList([6, 7, 8, 9]),
       kind: VaultItemKind.image,
     );
 
-    storage.reads.clear();
-    final scan = await repo.scan();
-
-    expect(scan.items.map((item) => item.id), contains(added.id));
+    storage.resetOperations();
+    operations.clear();
+    final unchanged = await repo.scan();
+    expect(unchanged.items.map((item) => item.id), contains(added.id));
     expect(storage.reads.where((path) => path.endsWith('.pvb')), isEmpty);
-    expect(await repo.readBytes(added.id), Uint8List.fromList([6, 7, 8, 9]));
+    expect(operations, {
+      VaultOperation.objectListing: 2,
+      VaultOperation.metadataProviderQuery: 1,
+      VaultOperation.catalogRead: 1,
+      VaultOperation.catalogDecrypt: 1,
+    });
+
+    final payload = objectFile(repo, added.id, '.pvb');
+    final bytes = await payload.readAsBytes();
+    bytes[bytes.length - 1] ^= 1;
+    await payload.writeAsBytes(bytes, flush: true);
+
+    storage.resetOperations();
+    operations.clear();
+    final stale = await repo.scan();
+    expect(stale.corruptCount, 0);
+    expect(stale.items.map((item) => item.id), contains(added.id));
+    expect(storage.reads.where((path) => path.endsWith('.pvb')), isEmpty);
+
+    storage.resetOperations();
+    operations.clear();
+    Object? readError;
+    try {
+      await repo.readBytes(added.id);
+    } on Object catch (error) {
+      readError = error;
+    }
+    expect(readError, isA<VaultItemInvalidException>());
+    expect(operations, containsPair(VaultOperation.mutationReconciliation, 1));
+
+    storage.resetOperations();
+    operations.clear();
+    final reconciled = await repo.scan();
+    expect(reconciled.items, isEmpty);
+    expect(reconciled.corruptCount, 1);
+    expect(storage.reads.where((path) => path.endsWith('.pvb')), hasLength(1));
   });
+  test(
+    'stale positive mtime invalidates catalog on authenticated failure',
+    () async {
+      final session = PortableVaultSession();
+      await session.open('0000');
+      final storage = _RecordingPortableVaultStorage(
+        DirectoryPortableVaultStorage(() async => root),
+        fixedModifiedAtMillis: 1700000000000,
+      );
+      final operations = <VaultOperation, int>{};
+      final repo = PortableVaultRepository(
+        storage: storage,
+        session: session,
+        operationRecorder: (operation) => operations.update(
+          operation,
+          (count) => count + 1,
+          ifAbsent: () => 1,
+        ),
+      );
+      final added = await repo.addBytes(
+        Uint8List.fromList([9, 8, 7, 6]),
+        kind: VaultItemKind.image,
+      );
+
+      final payload = objectFile(repo, added.id, '.pvb');
+      final bytes = await payload.readAsBytes();
+      bytes[bytes.length - 1] ^= 1;
+      await payload.writeAsBytes(bytes, flush: true);
+
+      storage.resetOperations();
+      operations.clear();
+      final stale = await repo.scan();
+      expect(stale.corruptCount, 0);
+      expect(stale.items.map((item) => item.id), contains(added.id));
+      expect(storage.reads.where((path) => path.endsWith('.pvb')), isEmpty);
+
+      await expectLater(
+        repo.readBytes(added.id),
+        throwsA(isA<VaultItemInvalidException>()),
+      );
+      expect(
+        operations,
+        containsPair(VaultOperation.mutationReconciliation, 1),
+      );
+
+      storage.resetOperations();
+      final reconciled = await repo.scan();
+      expect(reconciled.items, isEmpty);
+      expect(reconciled.corruptCount, 1);
+    },
+  );
+
+  test(
+    'failed catalog invalidation keeps proven-invalid payload off fast path',
+    () async {
+      final session = PortableVaultSession();
+      await session.open('0000');
+      final storage = _RecordingPortableVaultStorage(
+        DirectoryPortableVaultStorage(() async => root),
+        fixedModifiedAtMillis: 1700000000000,
+      );
+      final repo = PortableVaultRepository(storage: storage, session: session);
+      final added = await repo.addBytes(
+        Uint8List.fromList([4, 3, 2, 1]),
+        kind: VaultItemKind.image,
+      );
+
+      final payload = objectFile(repo, added.id, '.pvb');
+      final bytes = await payload.readAsBytes();
+      bytes[bytes.length - 1] ^= 1;
+      await payload.writeAsBytes(bytes, flush: true);
+
+      storage.failWriteSuffix = '.pvc';
+      await expectLater(
+        repo.readBytes(added.id),
+        throwsA(isA<VaultItemInvalidException>()),
+      );
+      storage.failWriteSuffix = null;
+
+      storage.resetOperations();
+      final reopenedRepo = PortableVaultRepository(
+        storage: storage,
+        session: session,
+      );
+      final reconciled = await reopenedRepo.scan();
+
+      expect(reconciled.items, isEmpty);
+      expect(reconciled.corruptCount, 1);
+      expect(
+        storage.reads.where((path) => path.endsWith('.pvb')),
+        hasLength(1),
+      );
+    },
+  );
+
+  test(
+    'catalog read failure invalidation stays restart-safe for proven-invalid payload',
+    () async {
+      final session = PortableVaultSession();
+      await session.open('0000');
+      final storage = _RecordingPortableVaultStorage(
+        DirectoryPortableVaultStorage(() async => root),
+        fixedModifiedAtMillis: 1700000000000,
+      );
+      final repo = PortableVaultRepository(storage: storage, session: session);
+      final added = await repo.addBytes(
+        Uint8List.fromList([8, 6, 4, 2]),
+        kind: VaultItemKind.image,
+      );
+
+      final payload = objectFile(repo, added.id, '.pvb');
+      final bytes = await payload.readAsBytes();
+      bytes[bytes.length - 1] ^= 1;
+      await payload.writeAsBytes(bytes, flush: true);
+
+      storage.failReadSuffix = '.pvc';
+      await expectLater(
+        repo.readBytes(added.id),
+        throwsA(isA<VaultItemInvalidException>()),
+      );
+      storage.failReadSuffix = null;
+
+      storage.resetOperations();
+      final reopenedRepo = PortableVaultRepository(
+        storage: storage,
+        session: session,
+      );
+      final reconciled = await reopenedRepo.scan();
+
+      expect(reconciled.items, isEmpty);
+      expect(reconciled.corruptCount, 1);
+      expect(
+        storage.reads.where((path) => path.endsWith('.pvb')),
+        hasLength(1),
+      );
+    },
+  );
+
+  test(
+    'unchanged reopen operation counts stay constant at 22 100 and 1000 items',
+    () async {
+      final session = PortableVaultSession();
+      await session.open('0000');
+      final material = session.requireMaterial();
+
+      for (final suppressModifiedAt in const [false, true]) {
+        for (final itemCount in const [22, 100, 1000]) {
+          if (await root.exists()) await root.delete(recursive: true);
+          await root.create(recursive: true);
+          final delegate = DirectoryPortableVaultStorage(() async => root);
+          final storage = _RecordingPortableVaultStorage(
+            delegate,
+            suppressModifiedAt: suppressModifiedAt,
+          );
+          final operations = <VaultOperation, int>{};
+          final repo = PortableVaultRepository(
+            storage: storage,
+            session: session,
+            operationRecorder: (operation) => operations.update(
+              operation,
+              (count) => count + 1,
+              ifAbsent: () => 1,
+            ),
+          );
+
+          for (var index = 0; index < itemCount; index += 1) {
+            final id = 'fixture-$index';
+            final encoded = await repo.objectCodec.encode(
+              PortableVaultObject(
+                fileName: '$id.bin',
+                mediaType: 'image/*',
+                createdAtMillis: index + 1,
+                namespaceId: material.namespaceId,
+                bytes: Uint8List.fromList([index & 0xff]),
+              ),
+              material.encryptionKey,
+            );
+            await delegate.write(
+              '${material.namespaceId}/objects/$id.pvb',
+              encoded,
+            );
+          }
+
+          final warm = await repo.scan();
+          expect(warm.items, hasLength(itemCount), reason: 'warm $itemCount');
+
+          storage.resetOperations();
+          operations.clear();
+          final reopened = await repo.scan();
+
+          expect(
+            reopened.items,
+            hasLength(itemCount),
+            reason: 'reopen $itemCount',
+          );
+          expect(
+            storage.listMetadataCalls,
+            1,
+            reason: 'objects list $itemCount',
+          );
+          expect(storage.listCalls, 1, reason: 'thumbnail list $itemCount');
+          expect(storage.metadataCalls, 0, reason: 'entry query $itemCount');
+          expect(
+            storage.reads.where((path) => path.endsWith('.pvb')),
+            isEmpty,
+            reason: 'payload reads $itemCount',
+          );
+          expect(
+            storage.reads.where((path) => path.endsWith('catalog.pvc')),
+            hasLength(1),
+            reason: 'catalog reads $itemCount',
+          );
+          expect(operations, {
+            VaultOperation.objectListing: 2,
+            VaultOperation.metadataProviderQuery: 1,
+            VaultOperation.catalogRead: 1,
+            VaultOperation.catalogDecrypt: 1,
+          }, reason: 'operation vector $itemCount');
+          expect(storage.writes, isEmpty, reason: 'writes $itemCount');
+          expect(storage.deleted, isEmpty, reason: 'deletes $itemCount');
+        }
+      }
+    },
+    timeout: const Timeout(Duration(minutes: 2)),
+  );
+  test(
+    'changed payload fingerprint revalidates only the affected object',
+    () async {
+      final session = PortableVaultSession();
+      await session.open('0000');
+      final storage = _RecordingPortableVaultStorage(
+        DirectoryPortableVaultStorage(() async => root),
+      );
+      final repo = PortableVaultRepository(storage: storage, session: session);
+      final items = <VaultItem>[];
+      for (var index = 0; index < 3; index += 1) {
+        items.add(
+          await repo.addBytes(
+            Uint8List.fromList([index + 1, index + 2, index + 3]),
+            kind: VaultItemKind.image,
+          ),
+        );
+      }
+
+      storage.resetOperations();
+      expect((await repo.scan()).items, hasLength(3));
+      expect(storage.reads.where((path) => path.endsWith('.pvb')), isEmpty);
+
+      final changed = objectFile(repo, items[1].id, '.pvb');
+      final bytes = await changed.readAsBytes();
+      bytes[bytes.length - 1] ^= 1;
+      await Future<void>.delayed(const Duration(milliseconds: 2));
+      await changed.writeAsBytes(bytes, flush: true);
+
+      storage.resetOperations();
+      final scan = await repo.scan();
+
+      expect(scan.corruptCount, 1);
+      expect(
+        storage.reads.where((path) => path.endsWith('.pvb')),
+        hasLength(1),
+      );
+    },
+  );
+
+  test('corrupt catalog is rebuilt from authenticated payloads once', () async {
+    final session = PortableVaultSession();
+    await session.open('0000');
+    final storage = _RecordingPortableVaultStorage(
+      DirectoryPortableVaultStorage(() async => root),
+    );
+    final repo = PortableVaultRepository(storage: storage, session: session);
+    for (var index = 0; index < 3; index += 1) {
+      await repo.addBytes(
+        Uint8List.fromList([index + 1]),
+        kind: VaultItemKind.document,
+      );
+    }
+
+    final catalog = catalogFile(repo);
+    final corrupt = await catalog.readAsBytes();
+    corrupt[corrupt.length - 1] ^= 1;
+    await catalog.writeAsBytes(corrupt, flush: true);
+
+    storage.resetOperations();
+    final rebuilt = await repo.scan();
+    expect(rebuilt.items, hasLength(3));
+    expect(storage.reads.where((path) => path.endsWith('.pvb')), hasLength(3));
+    expect(
+      storage.writes.where((path) => path.endsWith('catalog.pvc')),
+      hasLength(1),
+    );
+
+    storage.resetOperations();
+    expect((await repo.scan()).items, hasLength(3));
+    expect(storage.reads.where((path) => path.endsWith('.pvb')), isEmpty);
+  });
+
+  test('new payload revalidates only the new object', () async {
+    final session = PortableVaultSession();
+    await session.open('0000');
+    final material = session.requireMaterial();
+    final delegate = DirectoryPortableVaultStorage(() async => root);
+    final storage = _RecordingPortableVaultStorage(delegate);
+    final repo = PortableVaultRepository(storage: storage, session: session);
+    await repo.addBytes(Uint8List.fromList([1]), kind: VaultItemKind.document);
+    storage.resetOperations();
+    expect((await repo.scan()).items, hasLength(1));
+
+    final id = 'external-new';
+    final encoded = await repo.objectCodec.encode(
+      PortableVaultObject(
+        fileName: '$id.bin',
+        mediaType: 'application/octet-stream',
+        createdAtMillis: 999,
+        namespaceId: material.namespaceId,
+        bytes: Uint8List.fromList([9, 9]),
+      ),
+      material.encryptionKey,
+    );
+    await delegate.write('${material.namespaceId}/objects/$id.pvb', encoded);
+
+    storage.resetOperations();
+    final scan = await repo.scan();
+    expect(scan.items, hasLength(2));
+    expect(storage.reads.where((path) => path.endsWith('.pvb')), hasLength(1));
+    expect(
+      storage.writes.where((path) => path.endsWith('catalog.pvc')),
+      hasLength(1),
+    );
+  });
+  test(
+    'missing payload is removed from catalog without rereading survivors',
+    () async {
+      final session = PortableVaultSession();
+      await session.open('0000');
+      final storage = _RecordingPortableVaultStorage(
+        DirectoryPortableVaultStorage(() async => root),
+      );
+      final repo = PortableVaultRepository(storage: storage, session: session);
+      final items = <VaultItem>[];
+      for (var index = 0; index < 3; index += 1) {
+        items.add(
+          await repo.addBytes(
+            Uint8List.fromList([index + 5]),
+            kind: VaultItemKind.document,
+          ),
+        );
+      }
+      await objectFile(repo, items[1].id, '.pvb').delete();
+
+      storage.resetOperations();
+      final scan = await repo.scan();
+
+      expect(scan.items, hasLength(2));
+      expect(storage.reads.where((path) => path.endsWith('.pvb')), isEmpty);
+      expect(
+        storage.writes.where((path) => path.endsWith('catalog.pvc')),
+        hasLength(1),
+      );
+    },
+  );
   test(
     'different PIN sees independent namespace and switching back restores it',
     () async {
@@ -275,6 +686,64 @@ void main() {
       expect(await thumbnail.readAsBytes(), isNot(contains(thumbnailBytes)));
       expect(await objectFile(repo, added.id, '.pvt').exists(), isFalse);
       expect(await repo.readBytes(added.id), Uint8List.fromList([10, 20, 30]));
+    },
+  );
+
+  test(
+    'authenticated thumbnail write reuses loaded payload without a second read',
+    () async {
+      final session = PortableVaultSession();
+      await session.open('0000');
+      final storage = _RecordingPortableVaultStorage(
+        DirectoryPortableVaultStorage(() async => root),
+      );
+      final operations = <VaultOperation, int>{};
+      final repo = PortableVaultRepository(
+        storage: storage,
+        session: session,
+        operationRecorder: (operation) => operations.update(
+          operation,
+          (count) => count + 1,
+          ifAbsent: () => 1,
+        ),
+      );
+      final added = await repo.addBytes(
+        Uint8List.fromList([10, 20, 30]),
+        kind: VaultItemKind.image,
+      );
+      final thumbnailBytes = Uint8List.fromList([
+        0xff,
+        0xd8,
+        1,
+        2,
+        3,
+        0xff,
+        0xd9,
+      ]);
+
+      storage.resetOperations();
+      operations.clear();
+      expect(await repo.readBytes(added.id), Uint8List.fromList([10, 20, 30]));
+      await repo.writeThumbnailForAuthenticatedItem(added, thumbnailBytes);
+
+      expect(
+        storage.reads.where((path) => path.endsWith('.pvb')),
+        hasLength(1),
+      );
+      expect(
+        storage.writes.where(
+          (path) => path.endsWith('/cache/thumbnails/${added.id}.pvt'),
+        ),
+        hasLength(1),
+      );
+      expect(await repo.readThumbnail(added.id), thumbnailBytes);
+      expect(operations, {
+        VaultOperation.payloadRead: 1,
+        VaultOperation.payloadDecrypt: 1,
+        VaultOperation.thumbnailWrite: 1,
+        VaultOperation.thumbnailRead: 1,
+        VaultOperation.thumbnailDecrypt: 1,
+      });
     },
   );
 
@@ -814,22 +1283,43 @@ class _RecordingPortableVaultStorage
   _RecordingPortableVaultStorage(
     this.delegate, {
     this.suppressModifiedAt = false,
+    this.fixedModifiedAtMillis,
   });
 
   final PortableVaultStreamingStorage delegate;
   final bool suppressModifiedAt;
+  final int? fixedModifiedAtMillis;
   final List<String> deleted = <String>[];
   final List<String> reads = <String>[];
+  final List<String> writes = <String>[];
+  int listCalls = 0;
+  int listMetadataCalls = 0;
+  int metadataCalls = 0;
   String? failSuffix;
+  String? failReadSuffix;
+  String? failWriteSuffix;
+
+  void resetOperations() {
+    deleted.clear();
+    reads.clear();
+    writes.clear();
+    listCalls = 0;
+    listMetadataCalls = 0;
+    metadataCalls = 0;
+  }
 
   @override
   Future<bool> hasAccess() => delegate.hasAccess();
 
   @override
-  Future<List<String>> list(String path) => delegate.list(path);
+  Future<List<String>> list(String path) {
+    listCalls += 1;
+    return delegate.list(path);
+  }
 
   @override
   Future<List<PortableVaultStorageEntryMetadata>> listMetadata(String path) {
+    listMetadataCalls += 1;
     final target = delegate;
     if (target is! PortableVaultMetadataStorage) {
       throw StateError('delegate does not expose metadata');
@@ -837,13 +1327,15 @@ class _RecordingPortableVaultStorage
     return (target as PortableVaultMetadataStorage)
         .listMetadata(path)
         .then(
-          (entries) => suppressModifiedAt
+          (entries) => (suppressModifiedAt || fixedModifiedAtMillis != null)
               ? entries
                     .map(
                       (entry) => PortableVaultStorageEntryMetadata(
                         name: entry.name,
                         sizeBytes: entry.sizeBytes,
-                        modifiedAtMillis: 0,
+                        modifiedAtMillis: suppressModifiedAt
+                            ? 0
+                            : fixedModifiedAtMillis!,
                       ),
                     )
                     .toList(growable: false)
@@ -853,6 +1345,7 @@ class _RecordingPortableVaultStorage
 
   @override
   Future<PortableVaultStorageEntryMetadata?> metadata(String path) async {
+    metadataCalls += 1;
     final target = delegate;
     if (target is! PortableVaultEntryMetadataStorage) {
       throw StateError('delegate does not expose entry metadata');
@@ -860,23 +1353,34 @@ class _RecordingPortableVaultStorage
     final entry = await (target as PortableVaultEntryMetadataStorage).metadata(
       path,
     );
-    if (entry == null || !suppressModifiedAt) return entry;
+    if (entry == null ||
+        (!suppressModifiedAt && fixedModifiedAtMillis == null)) {
+      return entry;
+    }
     return PortableVaultStorageEntryMetadata(
       name: entry.name,
       sizeBytes: entry.sizeBytes,
-      modifiedAtMillis: 0,
+      modifiedAtMillis: suppressModifiedAt ? 0 : fixedModifiedAtMillis!,
     );
   }
 
   @override
   Future<Uint8List> read(String path) {
     reads.add(path);
+    if (failReadSuffix != null && path.endsWith(failReadSuffix!)) {
+      throw const PortableVaultStorageException('forced read failure');
+    }
     return delegate.read(path);
   }
 
   @override
-  Future<void> write(String path, Uint8List bytes) =>
-      delegate.write(path, bytes);
+  Future<void> write(String path, Uint8List bytes) {
+    writes.add(path);
+    if (failWriteSuffix != null && path.endsWith(failWriteSuffix!)) {
+      throw const PortableVaultStorageException('forced write failure');
+    }
+    return delegate.write(path, bytes);
+  }
 
   @override
   Future<PortableVaultWriteSession> beginWrite(String path) =>
