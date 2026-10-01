@@ -1,9 +1,16 @@
 import 'dart:developer' as developer;
 
+typedef UnlockPerformanceTraceSink = void Function(
+  String phase,
+  int? attemptId,
+  Map<String, Object?> fields,
+);
+
 class UnlockPerformanceTrace {
   UnlockPerformanceTrace._();
 
   static final Stopwatch _clock = Stopwatch()..start();
+  static UnlockPerformanceTraceSink? debugSink;
 
   static void mark(
     String phase, {
@@ -16,6 +23,7 @@ class UnlockPerformanceTrace {
       'attempt_id': ?attemptId,
       ...fields,
     };
+    debugSink?.call(phase, attemptId, Map.unmodifiable(arguments));
     developer.Timeline.instantSync(
       'private_vault.unlock.$phase',
       arguments: arguments,

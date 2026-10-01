@@ -23,6 +23,7 @@ class CalculatorUnlockGateController {
     required this.pinLength,
     required this.mode,
     required this.holdDuration,
+    this.onStarted,
     required this.onTriggered,
     required this.onReleased,
   });
@@ -30,6 +31,7 @@ class CalculatorUnlockGateController {
   int pinLength;
   CalculatorUnlockMode mode;
   Duration holdDuration;
+  final void Function(CalculatorUnlockAttempt attempt)? onStarted;
   final void Function(CalculatorUnlockAttempt attempt) onTriggered;
   final void Function(CalculatorUnlockTrigger trigger) onReleased;
 
@@ -71,19 +73,24 @@ class CalculatorUnlockGateController {
     _digits = '';
   }
 
-  void keyDown(String key) {
+  bool keyDown(String key) {
     cancelHold(notifyRelease: true);
     final trigger = _eligibleTrigger(key);
-    if (trigger == null) return;
+    if (trigger == null) return false;
 
     _idleTimer?.cancel();
     _idleTimer = null;
     _heldKey = key;
     _activeTrigger = trigger;
+    final attempt = CalculatorUnlockAttempt(
+      candidate: _digits,
+      trigger: trigger,
+    );
     UnlockPerformanceTrace.mark(
       'hold_pointer_down',
       fields: {'trigger': trigger.name, 'hold_ms': holdDuration.inMilliseconds},
     );
+    onStarted?.call(attempt);
     _holdTimer = Timer(holdDuration, () {
       if (_heldKey != key || _activeTrigger != trigger) return;
       _triggered = true;
@@ -91,10 +98,9 @@ class CalculatorUnlockGateController {
         'hold_threshold_fired',
         fields: {'trigger': trigger.name},
       );
-      onTriggered(
-        CalculatorUnlockAttempt(candidate: _digits, trigger: trigger),
-      );
+      onTriggered(attempt);
     });
+    return true;
   }
 
   bool keyUp(String key) {
@@ -106,9 +112,13 @@ class CalculatorUnlockGateController {
     _heldKey = null;
     _activeTrigger = null;
 
-    if (_triggered && trigger != null) {
+    if (trigger != null) {
       onReleased(trigger);
-      clear();
+      if (_triggered) {
+        clear();
+      } else if (_digits.isNotEmpty) {
+        _armIdleReset();
+      }
     } else if (_digits.isNotEmpty) {
       _armIdleReset();
     }
@@ -126,9 +136,13 @@ class CalculatorUnlockGateController {
     _activeTrigger = null;
     _triggered = false;
 
-    if (wasTriggered && trigger != null && notifyRelease) {
+    if (trigger != null && notifyRelease) {
       onReleased(trigger);
-      clear();
+      if (wasTriggered) {
+        clear();
+      } else if (_digits.isNotEmpty && _idleTimer == null) {
+        _armIdleReset();
+      }
     } else if (_digits.isNotEmpty && _idleTimer == null) {
       _armIdleReset();
     }

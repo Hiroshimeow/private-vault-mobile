@@ -1,11 +1,15 @@
 import 'dart:async';
+import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:private_vault_mobile/app/private_vault_app.dart';
 import 'package:private_vault_mobile/features/auth/biometric_unlock.dart';
 import 'package:private_vault_mobile/features/auth/lock_controller.dart';
+import 'package:private_vault_mobile/features/auth/unlock_performance_trace.dart';
+import 'package:private_vault_mobile/features/cover/calculator_cover.dart';
 import 'package:private_vault_mobile/features/settings/app_settings.dart';
+import 'package:private_vault_mobile/features/vault/vault_repository.dart';
 
 class DeferredUnlockService
     implements UnlockService, PinLengthAwareUnlockService {
@@ -49,6 +53,74 @@ class ControlledBiometric implements BiometricUnlock {
 
   @override
   Future<bool> isAvailable() async => true;
+}
+
+class TrackingPreparedSession implements PreparedPinSession {
+  bool destroyed = false;
+
+  @override
+  void destroy() => destroyed = true;
+}
+
+class DeferredPreparableRepository
+    implements PreparablePinSessionVaultRepository {
+  final Completer<PreparedPinSession> preparation =
+      Completer<PreparedPinSession>();
+  int prepareCalls = 0;
+  int activateCalls = 0;
+  int _generation = 0;
+  bool _open = false;
+
+  @override
+  int get sessionGeneration => _generation;
+
+  @override
+  bool get hasOpenSession => _open;
+
+  @override
+  Future<PreparedPinSession> prepareSession(String pin) {
+    prepareCalls += 1;
+    return preparation.future;
+  }
+
+  @override
+  int activatePreparedSession(PreparedPinSession prepared) {
+    activateCalls += 1;
+    _open = true;
+    return ++_generation;
+  }
+
+  @override
+  Future<void> openSession(String pin) async {
+    await openSessionWithGeneration(pin);
+  }
+
+  @override
+  Future<int> openSessionWithGeneration(String pin) async {
+    _open = true;
+    return ++_generation;
+  }
+
+  @override
+  void clearSession() => _open = false;
+
+  @override
+  void clearSessionIfGeneration(int generation) {
+    if (_generation == generation) _open = false;
+  }
+
+  @override
+  Future<VaultItem> addBytes(Uint8List bytes, {required VaultItemKind kind}) =>
+      throw UnimplementedError();
+
+  @override
+  Future<void> delete(String id) => throw UnimplementedError();
+
+  @override
+  Future<List<VaultItem>> list() => throw UnimplementedError();
+
+  @override
+  Future<Uint8List> readBytes(String id) => throw UnimplementedError();
 }
 
 Future<TestGesture> triggerBiometricHold(WidgetTester tester) async {
@@ -134,13 +206,61 @@ void main() {
       tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.paused);
       await tester.pump(const Duration(seconds: 3));
 
-      expect(unlock.verifyCalls, 0);
+      expect(unlock.verifyCalls, 1);
       expect(lock.isLocked, isTrue);
 
       await gesture.up();
       tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
       await tester.pump();
-      expect(unlock.verifyCalls, 0);
+      expect(unlock.verifyCalls, 1);
+    },
+  );
+
+  testWidgets(
+    'background after PIN threshold invalidates pending unlock and destroys prepared session',
+    (tester) async {
+      final lock = LockController();
+      final unlock = DeferredUnlockService();
+      final repository = DeferredPreparableRepository();
+      final prepared = TrackingPreparedSession();
+      await tester.pumpWidget(
+        PrivateVaultApp(
+          lockController: lock,
+          unlockService: unlock,
+          vaultRepository: repository,
+          initialSettings: const AppSettings.defaults().copyWith(
+            unlockHoldMs: 700,
+          ),
+        ),
+      );
+      await tester.pump();
+
+      for (final digit in '1123'.split('')) {
+        await tester.tap(find.byKey(Key('calculator-key-$digit')));
+      }
+      final trigger = find.byKey(const Key('calculator-key-1'));
+      final gesture = await tester.startGesture(tester.getCenter(trigger));
+      await tester.pump(const Duration(milliseconds: 700));
+
+      expect(unlock.verifyCalls, 1);
+      expect(repository.prepareCalls, 1);
+      expect(lock.isLocked, isTrue);
+
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.paused);
+      await tester.pump();
+
+      unlock.verification.complete(true);
+      repository.preparation.complete(prepared);
+      await tester.pumpAndSettle();
+
+      await gesture.up();
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+      await tester.pump();
+
+      expect(lock.isLocked, isTrue);
+      expect(repository.activateCalls, 0);
+      expect(repository.hasOpenSession, isFalse);
+      expect(prepared.destroyed, isTrue);
     },
   );
 
@@ -244,6 +364,208 @@ void main() {
       expect(lock.isLocked, isFalse);
     },
   );
+
+  testWidgets('touch key executes on pointer down exactly once', (
+    tester,
+  ) async {
+    await tester.pumpWidget(const MaterialApp(home: CalculatorCover()));
+
+    final key = find.byKey(const Key('calculator-key-7'));
+    final gesture = await tester.startGesture(tester.getCenter(key));
+    await tester.pump();
+
+    expect(
+      tester.widget<Text>(find.byKey(const Key('calculator-display'))).data,
+      '7',
+    );
+
+    await gesture.up();
+    await tester.pump();
+    expect(
+      tester.widget<Text>(find.byKey(const Key('calculator-display'))).data,
+      '7',
+    );
+  });
+
+  testWidgets(
+    'PIN preflight starts on pointer down and commits at threshold without release',
+    (tester) async {
+      final phases = <String>[];
+      UnlockPerformanceTrace.debugSink = (phase, _, _) => phases.add(phase);
+      addTearDown(() => UnlockPerformanceTrace.debugSink = null);
+      final lock = LockController();
+      final unlock = DeferredUnlockService();
+      await tester.pumpWidget(
+        PrivateVaultApp(
+          lockController: lock,
+          unlockService: unlock,
+          initialSettings: const AppSettings.defaults().copyWith(
+            unlockHoldMs: 700,
+          ),
+        ),
+      );
+      await tester.pump();
+
+      for (final digit in '1123'.split('')) {
+        await tester.tap(find.byKey(Key('calculator-key-$digit')));
+      }
+      final trigger = find.byKey(const Key('calculator-key-1'));
+      final gesture = await tester.startGesture(tester.getCenter(trigger));
+      await tester.pump();
+
+      expect(unlock.verifyCalls, 1);
+      expect(lock.isLocked, isTrue);
+
+      unlock.verification.complete(true);
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 699));
+      expect(lock.isLocked, isTrue);
+
+      await tester.pump(const Duration(milliseconds: 1));
+      await tester.pump();
+      expect(lock.isLocked, isFalse);
+      expect(
+        phases.indexOf('verification_start'),
+        lessThan(phases.indexOf('hold_threshold_fired')),
+      );
+      expect(
+        phases.indexOf('hold_threshold_fired'),
+        lessThan(phases.indexOf('unlock_committed')),
+      );
+
+      await gesture.up();
+    },
+  );
+
+  testWidgets('release before threshold invalidates stale PIN success', (
+    tester,
+  ) async {
+    final lock = LockController();
+    final unlock = DeferredUnlockService();
+    await tester.pumpWidget(
+      PrivateVaultApp(
+        lockController: lock,
+        unlockService: unlock,
+        initialSettings: const AppSettings.defaults().copyWith(
+          unlockHoldMs: 700,
+        ),
+      ),
+    );
+    await tester.pump();
+
+    for (final digit in '1123'.split('')) {
+      await tester.tap(find.byKey(Key('calculator-key-$digit')));
+    }
+    final trigger = find.byKey(const Key('calculator-key-1'));
+    final gesture = await tester.startGesture(tester.getCenter(trigger));
+    await tester.pump(const Duration(milliseconds: 100));
+    expect(unlock.verifyCalls, 1);
+
+    await gesture.up();
+    await tester.pump();
+    unlock.verification.complete(true);
+    await tester.pump(const Duration(seconds: 1));
+    await tester.pumpAndSettle();
+
+    expect(lock.isLocked, isTrue);
+  });
+
+  testWidgets('quick tap of eligible PIN digit remains a calculator tap', (
+    tester,
+  ) async {
+    var triggered = 0;
+    await tester.pumpWidget(
+      MaterialApp(
+        home: CalculatorCover(
+          holdDuration: const Duration(milliseconds: 700),
+          onUnlockTriggered: (_) => triggered += 1,
+        ),
+      ),
+    );
+
+    for (final digit in '1123'.split('')) {
+      await tester.tap(find.byKey(Key('calculator-key-$digit')));
+    }
+
+    await tester.tap(find.byKey(const Key('calculator-key-1')));
+    await tester.pump();
+
+    expect(
+      tester.widget<Text>(find.byKey(const Key('calculator-display'))).data,
+      '11231',
+    );
+    expect(triggered, 0);
+  });
+
+  testWidgets('quick tap of eligible biometric equals executes equals once', (
+    tester,
+  ) async {
+    var triggered = 0;
+    await tester.pumpWidget(
+      MaterialApp(
+        home: CalculatorCover(
+          biometricMode: true,
+          holdDuration: const Duration(milliseconds: 700),
+          onUnlockTriggered: (_) => triggered += 1,
+        ),
+      ),
+    );
+
+    await tester.tap(find.byKey(const Key('calculator-key-8')));
+    await tester.tap(find.byKey(const Key('calculator-key-+')));
+    for (final digit in '0004'.split('')) {
+      await tester.tap(find.byKey(Key('calculator-key-$digit')));
+    }
+
+    await tester.tap(find.byKey(const Key('calculator-key-=')));
+    await tester.pump();
+
+    expect(
+      tester.widget<Text>(find.byKey(const Key('calculator-display'))).data,
+      '12',
+    );
+    expect(triggered, 0);
+  });
+
+  testWidgets('pre-threshold cancel destroys prepared session material', (
+    tester,
+  ) async {
+    final lock = LockController();
+    final unlock = DeferredUnlockService();
+    final repository = DeferredPreparableRepository();
+    final prepared = TrackingPreparedSession();
+    await tester.pumpWidget(
+      PrivateVaultApp(
+        lockController: lock,
+        unlockService: unlock,
+        vaultRepository: repository,
+        initialSettings: const AppSettings.defaults().copyWith(
+          unlockHoldMs: 700,
+        ),
+      ),
+    );
+    await tester.pump();
+
+    for (final digit in '1123'.split('')) {
+      await tester.tap(find.byKey(Key('calculator-key-$digit')));
+    }
+    final trigger = find.byKey(const Key('calculator-key-1'));
+    final gesture = await tester.startGesture(tester.getCenter(trigger));
+    await tester.pump();
+    expect(unlock.verifyCalls, 1);
+    expect(repository.prepareCalls, 1);
+
+    await gesture.up();
+    await tester.pump();
+    unlock.verification.complete(true);
+    repository.preparation.complete(prepared);
+    await tester.pump(const Duration(seconds: 1));
+    await tester.pumpAndSettle();
+
+    expect(prepared.destroyed, isTrue);
+    expect(repository.activateCalls, 0);
+    expect(lock.isLocked, isTrue);
+  });
 
   testWidgets(
     'background after verification starts invalidates calculator result',

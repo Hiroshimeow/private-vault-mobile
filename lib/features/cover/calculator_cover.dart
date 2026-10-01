@@ -7,6 +7,7 @@ class CalculatorCover extends StatefulWidget {
     this.pinLength = 4,
     this.biometricMode = false,
     this.holdDuration = const Duration(seconds: 2),
+    this.onUnlockStarted,
     this.onUnlockTriggered,
     this.onUnlockReleased,
   });
@@ -14,6 +15,7 @@ class CalculatorCover extends StatefulWidget {
   final int pinLength;
   final bool biometricMode;
   final Duration holdDuration;
+  final ValueChanged<CalculatorUnlockAttempt>? onUnlockStarted;
   final ValueChanged<CalculatorUnlockAttempt>? onUnlockTriggered;
   final ValueChanged<CalculatorUnlockTrigger>? onUnlockReleased;
 
@@ -44,6 +46,7 @@ class _CalculatorCoverState extends State<CalculatorCover>
             ? CalculatorUnlockMode.biometric
             : CalculatorUnlockMode.pin,
         holdDuration: widget.holdDuration,
+        onStarted: (attempt) => widget.onUnlockStarted?.call(attempt),
         onTriggered: (attempt) => widget.onUnlockTriggered?.call(attempt),
         onReleased: (trigger) => widget.onUnlockReleased?.call(trigger),
       );
@@ -150,6 +153,10 @@ class _CalculatorCoverState extends State<CalculatorCover>
       _suppressedPressKey = null;
       return;
     }
+    _performPress(label);
+  }
+
+  void _performPress(String label) {
     if (RegExp(r'^\d$').hasMatch(label)) {
       _digit(label);
     } else if (label == 'C') {
@@ -299,12 +306,19 @@ class _CalculatorCoverState extends State<CalculatorCover>
                                       button: true,
                                       excludeSemantics: true,
                                       child: Listener(
-                                        onPointerDown: (_) =>
-                                            _unlockGate.keyDown(
-                                              labels[(row * 4) + column],
-                                            ),
+                                        onPointerDown: (_) {
+                                          final label =
+                                              labels[(row * 4) + column];
+                                          final eligibleHold = _unlockGate
+                                              .keyDown(label);
+                                          if (!eligibleHold) {
+                                            _suppressedPressKey = label;
+                                            _performPress(label);
+                                          }
+                                        },
                                         onPointerUp: (_) {
-                                          final label = labels[(row * 4) + column];
+                                          final label =
+                                              labels[(row * 4) + column];
                                           if (_unlockGate.keyUp(label)) {
                                             _suppressedPressKey = label;
                                           }
