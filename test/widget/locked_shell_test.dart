@@ -4,7 +4,6 @@ import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:private_vault_mobile/app/private_vault_app.dart';
-import 'package:private_vault_mobile/features/apps/vault_shuttle_service.dart';
 import 'package:private_vault_mobile/features/auth/biometric_unlock.dart';
 import 'package:private_vault_mobile/features/auth/lock_controller.dart';
 import 'package:private_vault_mobile/features/auth/unlock_gate/calculator_unlock_gate.dart';
@@ -96,24 +95,6 @@ MediaVaultService boundaryMedia(BoundaryVaultRepository repository) {
     capturePhoto: () async => null,
     saveExport: (_, _) async => true,
   );
-}
-
-class RecordingVaultShuttle implements VaultShuttle {
-  int purgeCalls = 0;
-
-  @override
-  Future<List<VaultItem>> listVaultItems() async => const [];
-
-  @override
-  Future<void> purgeStagedPlaintext() async {
-    purgeCalls += 1;
-  }
-
-  @override
-  Future<void> shareToIsolatedApp({
-    required VaultItem item,
-    required String packageName,
-  }) async {}
 }
 
 class CountingSettingsStorage implements SettingsStorage {
@@ -700,14 +681,12 @@ void main() {
     (tester) async {
       final lock = LockController();
       final repository = BoundaryVaultRepository();
-      final shuttle = RecordingVaultShuttle();
       await tester.pumpWidget(
         PrivateVaultApp(
           lockController: lock,
           unlockService: FakeUnlockService(),
           vaultRepository: repository,
           mediaService: boundaryMedia(repository),
-          vaultShuttle: shuttle,
         ),
       );
 
@@ -721,7 +700,6 @@ void main() {
       await tester.pumpAndSettle();
       expect(find.text('Calculator'), findsOneWidget);
       expect(find.text('Secret preview text'), findsNothing);
-      expect(shuttle.purgeCalls, 1);
 
       lock.unlock();
       await tester.pumpAndSettle();
@@ -990,45 +968,50 @@ void main() {
     expect(find.text('Vault'), findsNothing);
   });
 
-  testWidgets('calculator preserves repeated zero display and triggers exact held PIN once', (tester) async {
-    final attempts = <CalculatorUnlockAttempt>[];
-    await tester.pumpWidget(
-      MaterialApp(
-        home: CalculatorCover(
-          pinLength: 5,
-          holdDuration: const Duration(milliseconds: 700),
-          onUnlockTriggered: attempts.add,
+  testWidgets(
+    'calculator preserves repeated zero display and triggers exact held PIN once',
+    (tester) async {
+      final attempts = <CalculatorUnlockAttempt>[];
+      await tester.pumpWidget(
+        MaterialApp(
+          home: CalculatorCover(
+            pinLength: 5,
+            holdDuration: const Duration(milliseconds: 700),
+            onUnlockTriggered: attempts.add,
+          ),
         ),
-      ),
-    );
+      );
 
-    for (var index = 0; index < 5; index += 1) {
-      await tester.tap(find.byKey(const Key('calculator-key-0')));
-    }
-    await tester.pump();
-    expect(
-      tester.widget<Text>(find.byKey(const Key('calculator-display'))).data,
-      '00000',
-    );
+      for (var index = 0; index < 5; index += 1) {
+        await tester.tap(find.byKey(const Key('calculator-key-0')));
+      }
+      await tester.pump();
+      expect(
+        tester.widget<Text>(find.byKey(const Key('calculator-display'))).data,
+        '00000',
+      );
 
-    final zero = find.byKey(const Key('calculator-key-0'));
-    final gesture = await tester.startGesture(tester.getCenter(zero));
-    await tester.pump(const Duration(milliseconds: 699));
-    expect(attempts, isEmpty);
-    await tester.pump(const Duration(milliseconds: 1));
-    expect(attempts, hasLength(1));
-    expect(attempts.single.candidate, '00000');
-    await gesture.up();
-    await tester.pump();
+      final zero = find.byKey(const Key('calculator-key-0'));
+      final gesture = await tester.startGesture(tester.getCenter(zero));
+      await tester.pump(const Duration(milliseconds: 699));
+      expect(attempts, isEmpty);
+      await tester.pump(const Duration(milliseconds: 1));
+      expect(attempts, hasLength(1));
+      expect(attempts.single.candidate, '00000');
+      await gesture.up();
+      await tester.pump();
 
-    expect(attempts, hasLength(1));
-    expect(
-      tester.widget<Text>(find.byKey(const Key('calculator-display'))).data,
-      '00000',
-    );
-  });
+      expect(attempts, hasLength(1));
+      expect(
+        tester.widget<Text>(find.byKey(const Key('calculator-display'))).data,
+        '00000',
+      );
+    },
+  );
 
-  testWidgets('background invalidates a pending manual unlock result', (tester) async {
+  testWidgets('background invalidates a pending manual unlock result', (
+    tester,
+  ) async {
     final lock = LockController();
     final unlock = DeferredManualUnlockService();
     await tester.pumpWidget(
@@ -1053,5 +1036,4 @@ void main() {
 
     expect(lock.isLocked, isTrue);
   });
-
 }

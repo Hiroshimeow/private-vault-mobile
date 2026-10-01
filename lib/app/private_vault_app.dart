@@ -8,8 +8,6 @@ import 'package:flutter/services.dart';
 import 'package:private_vault_mobile/app/private_vault_theme.dart';
 import 'package:private_vault_mobile/features/apps/clone_profile_client.dart';
 import 'package:private_vault_mobile/features/apps/clone_profile_home.dart';
-import 'package:private_vault_mobile/features/apps/vault_shuttle_service.dart';
-import 'package:private_vault_mobile/features/apps/work_profile_client.dart';
 import 'package:private_vault_mobile/features/auth/biometric_unlock.dart';
 import 'package:private_vault_mobile/features/auth/lock_controller.dart';
 import 'package:private_vault_mobile/features/auth/secure_unlock_service.dart';
@@ -45,9 +43,7 @@ class PrivateVaultApp extends StatefulWidget {
     this.settingsStore,
     this.panicService,
     this.disguiseBridge,
-    this.workProfileClient,
     this.cloneProfileClient,
-    this.vaultShuttle,
     this.portableRootAccess,
     this.legacyVaultMigration,
     this.initialSettings = const AppSettings.defaults(),
@@ -62,9 +58,7 @@ class PrivateVaultApp extends StatefulWidget {
   final AppSettingsStore? settingsStore;
   final PanicSensorService? panicService;
   final PlatformDisguiseBridge? disguiseBridge;
-  final WorkProfileClient? workProfileClient;
   final CloneProfileClient? cloneProfileClient;
-  final VaultShuttle? vaultShuttle;
   final PortableVaultRootAccess? portableRootAccess;
   final LegacyVaultMigrationService? legacyVaultMigration;
   final AppSettings initialSettings;
@@ -143,10 +137,6 @@ class _PrivateVaultAppState extends State<PrivateVaultApp>
     final repository = widget.vaultRepository;
     if (repository is PinSessionVaultRepository) {
       repository.clearSession();
-    }
-    final shuttle = widget.vaultShuttle;
-    if (shuttle != null) {
-      unawaited(shuttle.purgeStagedPlaintext());
     }
   }
 
@@ -634,9 +624,7 @@ class _PrivateVaultAppState extends State<PrivateVaultApp>
             },
             settings: _settings,
             disguiseBridge: widget.disguiseBridge,
-            workProfileClient: widget.workProfileClient,
             cloneProfileClient: widget.cloneProfileClient,
-            vaultShuttle: widget.vaultShuttle,
             portableRootAccess: widget.portableRootAccess,
             legacyVaultMigration: widget.legacyVaultMigration,
             onSettingsChanged: (next) {
@@ -701,9 +689,7 @@ class SecretWorkspace extends StatefulWidget {
     this.disguiseBridge,
     this.portableRootAccess,
     this.legacyVaultMigration,
-    this.workProfileClient,
     this.cloneProfileClient,
-    this.vaultShuttle,
     this.vaultRepository,
     this.mediaService,
   });
@@ -718,9 +704,7 @@ class SecretWorkspace extends StatefulWidget {
   final PlatformDisguiseBridge? disguiseBridge;
   final PortableVaultRootAccess? portableRootAccess;
   final LegacyVaultMigrationService? legacyVaultMigration;
-  final WorkProfileClient? workProfileClient;
   final CloneProfileClient? cloneProfileClient;
-  final VaultShuttle? vaultShuttle;
   final VaultRepository? vaultRepository;
   final MediaVaultService? mediaService;
 

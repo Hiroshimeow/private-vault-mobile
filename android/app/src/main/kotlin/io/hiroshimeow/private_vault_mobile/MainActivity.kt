@@ -18,7 +18,6 @@ import io.flutter.plugin.common.MethodChannel
 
 class MainActivity : FlutterFragmentActivity() {
     private val channelName = "private_vault/platform"
-    private var workProfileApiAdapter: WorkProfileHostApiAdapter? = null
     private var portableVaultTreeBridge: PortableVaultTreeBridge? = null
     private var cloneProfileBridge: CloneProfileBridge? = null
     private val documentStreams = mutableMapOf<String, InputStream>()
@@ -30,12 +29,6 @@ class MainActivity : FlutterFragmentActivity() {
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
-        val adapter = WorkProfileHostApiAdapter(this)
-        workProfileApiAdapter = adapter
-        WorkProfileHostApi.setUp(
-            flutterEngine.dartExecutor.binaryMessenger,
-            adapter,
-        )
         portableVaultTreeBridge = PortableVaultTreeBridge(
             this,
             flutterEngine.dartExecutor.binaryMessenger,
@@ -148,9 +141,6 @@ class MainActivity : FlutterFragmentActivity() {
         if (portableVaultTreeBridge?.onActivityResult(requestCode, resultCode, data) == true) {
             return
         }
-        if (workProfileApiAdapter?.onActivityResult(requestCode, resultCode, data) == true) {
-            return
-        }
         super.onActivityResult(requestCode, resultCode, data)
     }
 
@@ -161,8 +151,6 @@ class MainActivity : FlutterFragmentActivity() {
         cloneProfileBridge = null
         documentStreams.values.forEach { input -> runCatching { input.close() } }
         documentStreams.clear()
-        WorkProfileHostApi.setUp(flutterEngine.dartExecutor.binaryMessenger, null)
-        workProfileApiAdapter = null
         super.cleanUpFlutterEngine(flutterEngine)
     }
 

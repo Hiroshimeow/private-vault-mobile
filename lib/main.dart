@@ -8,8 +8,6 @@ import 'package:private_vault_mobile/app/startup_bootstrap.dart';
 import 'package:private_vault_mobile/core/crypto/vault_crypto.dart';
 import 'package:private_vault_mobile/core/storage/secret_store.dart';
 import 'package:private_vault_mobile/features/apps/clone_profile_client.dart';
-import 'package:private_vault_mobile/features/apps/vault_shuttle_service.dart';
-import 'package:private_vault_mobile/features/apps/work_profile_client.dart';
 import 'package:private_vault_mobile/features/auth/biometric_unlock.dart';
 import 'package:private_vault_mobile/features/auth/lock_controller.dart';
 import 'package:private_vault_mobile/features/auth/secure_unlock_service.dart';
@@ -86,17 +84,6 @@ Future<Widget> _initializePrivateVault() async {
     saveExport: MediaVaultService.saveDeviceExport,
   );
   await stages.run('preview_cleanup', media.purgePreviewPlaintextStrict);
-  final vaultShuttle = Platform.isAndroid
-      ? VaultShuttleService(
-          repository: repository,
-          bridge: PigeonVaultShuttleBridge(),
-          tempDirectory: getTemporaryDirectory,
-        )
-      : null;
-  if (vaultShuttle != null) {
-    await stages.run('staged_cleanup', vaultShuttle.purgeStagedPlaintext);
-  }
-
   final panic = PanicSensorService(
     lockController: lockController,
     settings: settings,
@@ -114,13 +101,9 @@ Future<Widget> _initializePrivateVault() async {
     disguiseBridge: PlatformDisguiseBridge(),
     portableRootAccess: portableTree,
     legacyVaultMigration: legacyVaultMigration,
-    workProfileClient: Platform.isAndroid
-        ? PigeonWorkProfileClient()
-        : const UnavailableWorkProfileClient(),
     cloneProfileClient: Platform.isAndroid
         ? PlatformCloneProfileClient()
         : const UnavailableCloneProfileClient(),
-    vaultShuttle: vaultShuttle,
     initialSettings: settings,
   );
 }
