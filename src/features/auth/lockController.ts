@@ -1,11 +1,11 @@
 type Listener = () => void;
 
 export class LockController {
-  private _isLocked = true;
+  private _isLocked = false;
   private _backgroundTimer: ReturnType<typeof setTimeout> | null = null;
   private _confidentialityBoundary: (() => void) | null = null;
   private _listeners: Set<Listener> = new Set();
-  public backgroundLock = true;
+  public backgroundLock = false;
 
   get isLocked(): boolean {
     return this._isLocked;

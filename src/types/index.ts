@@ -8,6 +8,20 @@ export interface VaultItem {
   createdAt: string; // ISO string
   name?: string;
   size?: number;
+  album?: string;
+  isFavorite?: boolean;
+  thumbnail?: string;
+  width?: number;
+  height?: number;
+  duration?: string; // For videos e.g. "0:42"
+}
+
+export interface VaultAlbum {
+  id: string;
+  name: string;
+  coverId?: string;
+  count?: number;
+  createdAt: string;
 }
 
 export interface AppSettings {
@@ -47,11 +61,14 @@ export interface CloneApp {
   id: string;
   name: string;
   packageName: string;
-  category: 'social' | 'messaging' | 'finance' | 'tools' | 'custom';
+  category: 'system' | 'social' | 'messaging' | 'finance' | 'tools' | 'custom';
   status: 'uncloned' | 'cloned' | 'paused';
   iconColor: string;
+  iconType?: string;
   lastLaunchedAt?: string;
   dataSizeBytes?: number;
+  badgeCount?: number;
+  isBuiltinSecureApp?: boolean;
 }
 
 export interface CloneProfileState {

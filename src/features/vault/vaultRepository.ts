@@ -111,7 +111,16 @@ export class LocalVaultRepository {
 
   async addBytes(
     bytes: Uint8Array,
-    options: { kind: VaultItemKind; name?: string }
+    options: {
+      kind: VaultItemKind;
+      name?: string;
+      album?: string;
+      isFavorite?: boolean;
+      thumbnail?: string;
+      width?: number;
+      height?: number;
+      duration?: string;
+    }
   ): Promise<VaultItem> {
     if (options.kind === 'unknown') {
       throw new Error('Unknown kind cannot be persisted');
@@ -130,6 +139,12 @@ export class LocalVaultRepository {
         name: options.name || `item-${id.slice(0, 8)}`,
         createdAt,
         size: bytes.byteLength,
+        album: options.album || 'default',
+        isFavorite: options.isFavorite || false,
+        thumbnail: options.thumbnail,
+        width: options.width,
+        height: options.height,
+        duration: options.duration,
       })
     );
     const sealedMeta = await this.crypto.encrypt(metaClear, key);
@@ -162,6 +177,12 @@ export class LocalVaultRepository {
       name: options.name,
       size: bytes.byteLength,
       createdAt,
+      album: options.album || 'default',
+      isFavorite: options.isFavorite || false,
+      thumbnail: options.thumbnail,
+      width: options.width,
+      height: options.height,
+      duration: options.duration,
     };
   }
 
@@ -234,6 +255,12 @@ export class LocalVaultRepository {
           name: meta.name,
           size: record.size,
           createdAt: meta.createdAt || record.createdAt,
+          album: meta.album || 'default',
+          isFavorite: !!meta.isFavorite,
+          thumbnail: meta.thumbnail,
+          width: meta.width,
+          height: meta.height,
+          duration: meta.duration,
         });
       } catch {
         items.push({
@@ -248,6 +275,45 @@ export class LocalVaultRepository {
     return items;
   }
 
+  async updateMeta(id: string, updates: Partial<VaultItem>): Promise<void> {
+    const key = await this.requiredKey();
+    const db = await this.getDb();
+
+    const record = await new Promise<EncryptedVaultRecord | undefined>((resolve, reject) => {
+      const tx = db.transaction(this.storeName, 'readonly');
+      const store = tx.objectStore(this.storeName);
+      const req = store.get(id);
+      req.onsuccess = () => resolve(req.result as EncryptedVaultRecord);
+      req.onerror = () => reject(req.error);
+    });
+
+    if (!record) return;
+
+    const metaSealed: SealedVaultData = {
+      nonce: this.base64ToBytes(record.metaNonce),
+      mac: this.base64ToBytes(record.metaMac),
+      cipherText: this.base64ToBytes(record.metaCipherText),
+    };
+    const metaBytes = await this.crypto.decrypt(metaSealed, key);
+    const meta = JSON.parse(new TextDecoder().decode(metaBytes));
+
+    const updatedMeta = { ...meta, ...updates };
+    const metaClear = new TextEncoder().encode(JSON.stringify(updatedMeta));
+    const sealedMeta = await this.crypto.encrypt(metaClear, key);
+
+    record.metaNonce = this.bytesToBase64(sealedMeta.nonce);
+    record.metaMac = this.bytesToBase64(sealedMeta.mac);
+    record.metaCipherText = this.bytesToBase64(sealedMeta.cipherText);
+
+    await new Promise<void>((resolve, reject) => {
+      const tx = db.transaction(this.storeName, 'readwrite');
+      const store = tx.objectStore(this.storeName);
+      const req = store.put(record);
+      req.onsuccess = () => resolve();
+      req.onerror = () => reject(req.error);
+    });
+  }
+
   async delete(id: string): Promise<void> {
     const db = await this.getDb();
     await new Promise<void>((resolve, reject) => {
@@ -256,6 +322,19 @@ export class LocalVaultRepository {
       const req = store.delete(id);
       req.onsuccess = () => resolve();
       req.onerror = () => reject(req.error);
+    });
+  }
+
+  async batchDelete(ids: string[]): Promise<void> {
+    const db = await this.getDb();
+    await new Promise<void>((resolve, reject) => {
+      const tx = db.transaction(this.storeName, 'readwrite');
+      const store = tx.objectStore(this.storeName);
+      for (const id of ids) {
+        store.delete(id);
+      }
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error);
     });
   }
 

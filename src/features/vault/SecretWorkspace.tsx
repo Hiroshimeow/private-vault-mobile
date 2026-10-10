@@ -1,12 +1,20 @@
-import React, { useState, useMemo } from 'react';
-import { Archive, Layers, Globe, Settings, Lock } from 'lucide-react';
-import { AppSettings } from '../../types';
+import React, { useState, useMemo, useEffect } from 'react';
+import {
+  Layers,
+  Image as ImageIcon,
+  Globe,
+  Settings,
+  Lock,
+  HardDrive,
+} from 'lucide-react';
+import { AppSettings, VaultItem } from '../../types';
 import { LocalVaultRepository } from './vaultRepository';
-import { VaultHome } from './VaultHome';
+import { VaultGallery } from '../gallery/VaultGallery';
 import { BrowserHome } from '../browser/BrowserHome';
 import { SettingsHome } from '../settings/SettingsHome';
 import { CloneAppsHome } from '../apps/CloneAppsHome';
 import { CloneService } from '../apps/cloneService';
+import { SecureFilesAppView } from '../apps/running/SecureFilesAppView';
 
 interface SecretWorkspaceProps {
   onLock: () => void;
@@ -25,55 +33,85 @@ export const SecretWorkspace: React.FC<SecretWorkspaceProps> = ({
   onTriggerPanic,
   onResetPin,
 }) => {
-  const [activeTab, setActiveTab] = useState<'apps' | 'vault' | 'browser' | 'settings'>('apps');
+  const [activeTab, setActiveTab] = useState<'apps' | 'gallery' | 'browser' | 'files' | 'settings'>('apps');
+  const [vaultMedia, setVaultMedia] = useState<VaultItem[]>([]);
   const cloneService = useMemo(() => new CloneService(), []);
 
+  // Pre-load media list so cloned apps (like Zalo/Telegram) have access to attach vault photos
+  const reloadVaultMedia = async () => {
+    try {
+      const items = await vaultRepository.list();
+      setVaultMedia(items.filter((i) => i.kind === 'image' || i.kind === 'video'));
+    } catch (e) {
+      console.error(e);
+    }
+  };
+
+  useEffect(() => {
+    reloadVaultMedia();
+  }, [vaultRepository, activeTab]);
+
   const titles = {
-    apps: 'Clone Space',
-    vault: 'Vault',
-    browser: 'Browser',
-    settings: 'Settings',
+    apps: 'Thư mục Bảo mật',
+    gallery: 'Bộ sưu tập Bảo mật',
+    browser: 'Trình duyệt Riêng tư',
+    files: 'File của bạn',
+    settings: 'Cài đặt Bảo mật',
   };
 
   return (
-    <div className="flex flex-col h-full max-w-md mx-auto bg-zinc-50 dark:bg-[#101718] select-none">
-      <header className="px-5 py-3.5 border-b border-zinc-200/80 dark:border-zinc-800/80 bg-white dark:bg-[#172021] flex items-center justify-between shrink-0 shadow-xs">
+    <div className="flex flex-col h-full max-w-md mx-auto bg-[#0d1314] text-zinc-100 select-none overflow-hidden font-sans">
+      {/* Top Main Status Bar */}
+      <header className="px-4 py-3 border-b border-zinc-800 bg-[#131b1d] flex items-center justify-between shrink-0 shadow-xs">
         <div className="flex items-center gap-2">
-          <div className="w-2 h-2 rounded-full bg-teal-500 animate-pulse" />
-          <h1 className="text-lg font-bold tracking-tight text-zinc-900 dark:text-zinc-100">
-            {titles[activeTab]}
+          <div className="w-2 h-2 rounded-full bg-teal-400 animate-pulse" />
+          <h1 className="text-base font-bold tracking-tight text-white flex items-center gap-2">
+            <span>{titles[activeTab]}</span>
           </h1>
         </div>
         <button
           onClick={onLock}
-          title="Lock now"
-          className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl border border-zinc-200 dark:border-zinc-700 bg-zinc-50 dark:bg-zinc-800 text-zinc-700 dark:text-zinc-200 text-xs font-semibold hover:bg-zinc-100 dark:hover:bg-zinc-700 active:scale-95 transition-all"
+          title="Khóa ngay lập tức"
+          className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl border border-zinc-700 bg-zinc-800/80 text-zinc-200 text-xs font-semibold hover:bg-zinc-700 active:scale-95 transition-all shadow-xs"
         >
-          <Lock className="w-3.5 h-3.5 text-[#315e63] dark:text-[#78aeb3]" />
-          <span>Lock</span>
+          <Lock className="w-3.5 h-3.5 text-teal-400" />
+          <span>Khóa</span>
         </button>
       </header>
 
+      {/* Main Content Body */}
       <main className="flex-1 overflow-hidden relative">
         {activeTab === 'apps' && (
           <CloneAppsHome
             cloneService={cloneService}
             vaultRepository={vaultRepository}
+            vaultMedia={vaultMedia}
             onLock={onLock}
+            onOpenGallery={() => setActiveTab('gallery')}
           />
         )}
-        {activeTab === 'vault' && (
-          <VaultHome
+
+        {activeTab === 'gallery' && (
+          <VaultGallery
             repository={vaultRepository}
             confirmExport={settings.confirmExport}
           />
         )}
+
         {activeTab === 'browser' && (
           <BrowserHome
             repository={vaultRepository}
             clearOnClose={settings.browserClearOnClose}
           />
         )}
+
+        {activeTab === 'files' && (
+          <SecureFilesAppView
+            onBack={() => setActiveTab('apps')}
+            repository={vaultRepository}
+          />
+        )}
+
         {activeTab === 'settings' && (
           <SettingsHome
             settings={settings}
@@ -84,85 +122,96 @@ export const SecretWorkspace: React.FC<SecretWorkspaceProps> = ({
         )}
       </main>
 
-      <nav className="h-16 border-t border-zinc-200/80 dark:border-zinc-800/80 bg-white dark:bg-[#172021] flex items-center justify-around px-2 shrink-0 shadow-xs">
+      {/* Bottom Navigation Tabs (Samsung One UI Navigation Bar) */}
+      <nav className="h-16 border-t border-zinc-800 bg-[#131b1d] flex items-center justify-around px-2 shrink-0 shadow-lg">
         <button
           onClick={() => setActiveTab('apps')}
           className={`flex flex-col items-center justify-center gap-1 flex-1 py-1 rounded-xl transition-all ${
             activeTab === 'apps'
-              ? 'text-[#315e63] dark:text-[#78aeb3] font-semibold'
-              : 'text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-300 font-normal'
+              ? 'text-teal-400 font-bold'
+              : 'text-zinc-400 hover:text-zinc-200 font-normal'
           }`}
         >
           <div
-            className={`px-3 py-1 rounded-full ${
-              activeTab === 'apps'
-                ? 'bg-teal-100/70 dark:bg-teal-950/80'
-                : 'bg-transparent'
+            className={`px-3 py-1 rounded-full transition-colors ${
+              activeTab === 'apps' ? 'bg-teal-500/20' : 'bg-transparent'
             }`}
           >
             <Layers className="w-5 h-5" />
           </div>
-          <span className="text-[11px]">Clone</span>
+          <span className="text-[10px]">Ứng dụng</span>
         </button>
 
         <button
-          onClick={() => setActiveTab('vault')}
+          onClick={() => setActiveTab('gallery')}
           className={`flex flex-col items-center justify-center gap-1 flex-1 py-1 rounded-xl transition-all ${
-            activeTab === 'vault'
-              ? 'text-[#315e63] dark:text-[#78aeb3] font-semibold'
-              : 'text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-300 font-normal'
+            activeTab === 'gallery'
+              ? 'text-teal-400 font-bold'
+              : 'text-zinc-400 hover:text-zinc-200 font-normal'
           }`}
         >
           <div
-            className={`px-3 py-1 rounded-full ${
-              activeTab === 'vault'
-                ? 'bg-teal-100/70 dark:bg-teal-950/80'
-                : 'bg-transparent'
+            className={`px-3 py-1 rounded-full transition-colors ${
+              activeTab === 'gallery' ? 'bg-teal-500/20' : 'bg-transparent'
             }`}
           >
-            <Archive className="w-5 h-5" />
+            <ImageIcon className="w-5 h-5" />
           </div>
-          <span className="text-[11px]">Vault</span>
+          <span className="text-[10px]">Bộ sưu tập</span>
         </button>
 
         <button
           onClick={() => setActiveTab('browser')}
           className={`flex flex-col items-center justify-center gap-1 flex-1 py-1 rounded-xl transition-all ${
             activeTab === 'browser'
-              ? 'text-[#315e63] dark:text-[#78aeb3] font-semibold'
-              : 'text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-300 font-normal'
+              ? 'text-teal-400 font-bold'
+              : 'text-zinc-400 hover:text-zinc-200 font-normal'
           }`}
         >
           <div
-            className={`px-3 py-1 rounded-full ${
-              activeTab === 'browser'
-                ? 'bg-teal-100/70 dark:bg-teal-950/80'
-                : 'bg-transparent'
+            className={`px-3 py-1 rounded-full transition-colors ${
+              activeTab === 'browser' ? 'bg-teal-500/20' : 'bg-transparent'
             }`}
           >
             <Globe className="w-5 h-5" />
           </div>
-          <span className="text-[11px]">Browser</span>
+          <span className="text-[10px]">Trình duyệt</span>
+        </button>
+
+        <button
+          onClick={() => setActiveTab('files')}
+          className={`flex flex-col items-center justify-center gap-1 flex-1 py-1 rounded-xl transition-all ${
+            activeTab === 'files'
+              ? 'text-teal-400 font-bold'
+              : 'text-zinc-400 hover:text-zinc-200 font-normal'
+          }`}
+        >
+          <div
+            className={`px-3 py-1 rounded-full transition-colors ${
+              activeTab === 'files' ? 'bg-teal-500/20' : 'bg-transparent'
+            }`}
+          >
+            <HardDrive className="w-5 h-5" />
+          </div>
+          <span className="text-[10px]">File</span>
         </button>
 
         <button
           onClick={() => setActiveTab('settings')}
           className={`flex flex-col items-center justify-center gap-1 flex-1 py-1 rounded-xl transition-all ${
             activeTab === 'settings'
-              ? 'text-[#315e63] dark:text-[#78aeb3] font-semibold'
-              : 'text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-300 font-normal'
+              ? 'text-teal-400 font-bold'
+              : 'text-zinc-400 hover:text-zinc-200 font-normal'
           }`}
         >
           <div
-            className={`px-3 py-1 rounded-full ${
-              activeTab === 'settings'
-                ? 'bg-teal-100/70 dark:bg-teal-950/80'
-                : 'bg-transparent'
+            className={`px-3 py-1 rounded-full transition-colors ${
+              activeTab === 'settings' ? 'bg-teal-500/20' : 'bg-transparent'
             }`}
           >
             <Settings className="w-5 h-5" />
           </div>
-          <span className="text-[11px]">Settings</span>
+          <span className="text-[10px]">Cài đặt</span>
         </button>
       </nav>
     </div>
