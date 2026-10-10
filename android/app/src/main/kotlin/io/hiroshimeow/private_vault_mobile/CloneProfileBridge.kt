@@ -20,26 +20,27 @@ class CloneProfileBridge(
     private val executor = Executors.newSingleThreadExecutor()
     private val prefs = activity.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
     @Volatile private var serviceBinder: IBinder? = null
+    @Volatile private var disposed = false
     private var binding = false
     private val serviceWaiters = mutableListOf<(IBinder?) -> Unit>()
 
-    private val serviceArgs: Shizuku.UserServiceArgs
-        get() = Shizuku.UserServiceArgs(
-            ComponentName(activity, CloneProfileUserService::class.java),
-        )
-            .processNameSuffix("clone_profile")
-            .tag("private-vault-clone-profile")
-            .version(1)
-            .daemon(false)
+    private val serviceArgs = Shizuku.UserServiceArgs(
+        ComponentName(activity, CloneProfileUserService::class.java),
+    )
+        .processNameSuffix("clone_profile")
+        .tag("private-vault-clone-profile")
+        .version(1)
+        .daemon(false)
 
     private val serviceConnection = object : ServiceConnection {
         override fun onServiceConnected(name: ComponentName?, service: IBinder?) {
             synchronized(serviceWaiters) {
-                serviceBinder = service
                 binding = false
+                val activeService = if (disposed) null else service
+                serviceBinder = activeService
                 val waiters = serviceWaiters.toList()
                 serviceWaiters.clear()
-                waiters.forEach { it(service) }
+                waiters.forEach { it(activeService) }
             }
         }
 
@@ -156,12 +157,20 @@ class CloneProfileBridge(
     }
 
     private fun withService(callback: (IBinder?) -> Unit) {
+        if (disposed) {
+            callback(null)
+            return
+        }
         val current = serviceBinder
         if (current?.isBinderAlive == true) {
             callback(current)
             return
         }
         synchronized(serviceWaiters) {
+            if (disposed) {
+                callback(null)
+                return
+            }
             val rechecked = serviceBinder
             if (rechecked?.isBinderAlive == true) {
                 callback(rechecked)
@@ -277,45 +286,65 @@ class CloneProfileBridge(
             )
             if (create.exitCode != 0) {
                 val details = "${create.stdout}\n${create.stderr}".trim()
-                val unsupported = details.contains("user type", ignoreCase = true) ||
-                    details.contains("unsupported", ignoreCase = true) ||
-                    details.contains("cannot add", ignoreCase = true)
+                    .ifBlank { "Android did not create a clone profile." }
+                    .take(2048)
+                val failure = CloneProfileCreatePolicy.classifyFailure(
+                    create.stdout,
+                    create.stderr,
+                )
                 return mapOf(
-                    "state" to if (unsupported) {
+                    "state" to if (
+                        failure == CloneProfileCreatePolicy.FailureState.cloneProfileUnsupportedByOem
+                    ) {
                         STATE_OEM_UNSUPPORTED
                     } else {
                         STATE_OPERATION_FAILED
                     },
-                    "message" to details.ifBlank { "Android did not create a clone profile." },
+                    "message" to details,
                 )
             }
-            userId = Regex("""(?:id\s+|UserInfo\{)(\d+)""")
-                .find(create.stdout)
-                ?.groupValues
-                ?.getOrNull(1)
-                ?.toIntOrNull()
-            if (userId == null) {
-                val users = run(binder, "list-users")
-                if (users.exitCode != 0) {
-                    return mapOf(
-                        "state" to STATE_OPERATION_FAILED,
-                        "message" to "${users.stdout}\n${users.stderr}".trim()
-                            .ifBlank { "Clone profile was created but Android users could not be queried." },
-                    )
-                }
-                val discovered = CloneProfileDiscovery.cloneProfileIds(users.stdout)
-                userId = discovered.singleOrNull()
-            }
-            if (userId == null) {
+            val users = run(binder, "list-users")
+            if (users.exitCode != 0) {
                 return mapOf(
                     "state" to STATE_OPERATION_FAILED,
-                    "message" to "Clone profile was created but its user id could not be verified.",
+                    "message" to "${users.stdout}\n${users.stderr}".trim()
+                        .ifBlank { "Clone profile was created but Android users could not be queried." }
+                        .take(2048),
                 )
             }
+            val proof = CloneProfileCreatePolicy.verifyCreatedClone(
+                createStdout = create.stdout,
+                postCreateUsers = users.stdout,
+            )
+            if (proof.state != CloneProfileDiscovery.State.ready ||
+                proof.userId == null
+            ) {
+                return mapOf(
+                    "state" to if (proof.state == CloneProfileDiscovery.State.conflicting) {
+                        STATE_CONFLICTING_PROFILE
+                    } else {
+                        STATE_OPERATION_FAILED
+                    },
+                    "message" to proof.message,
+                    "userId" to proof.userId,
+                )
+            }
+            userId = proof.userId
             prefs.edit().putInt(KEY_OWNED_CLONE_USER, userId).apply()
         }
 
-        run(binder, "start-user", listOf(userId.toString()))
+        val start = run(binder, "start-user", listOf(userId.toString()))
+        CloneProfileStartPolicy.failureMessage(
+            exitCode = start.exitCode,
+            stdout = start.stdout,
+            stderr = start.stderr,
+        )?.let { message ->
+            return mapOf(
+                "state" to STATE_OPERATION_FAILED,
+                "message" to message,
+                "userId" to userId,
+            )
+        }
         val install = run(
             binder,
             "install-existing",
@@ -354,7 +383,18 @@ class CloneProfileBridge(
                 "state" to STATE_OPERATION_FAILED,
                 "message" to "The cloned package has no launchable activity.",
             )
-        run(binder, "start-user", listOf(userId.toString()))
+        val start = run(binder, "start-user", listOf(userId.toString()))
+        CloneProfileStartPolicy.failureMessage(
+            exitCode = start.exitCode,
+            stdout = start.stdout,
+            stderr = start.stderr,
+        )?.let { message ->
+            return mapOf(
+                "state" to STATE_OPERATION_FAILED,
+                "message" to message,
+                "userId" to userId,
+            )
+        }
         val launch = run(
             binder,
             "launch",
@@ -426,8 +466,27 @@ class CloneProfileBridge(
 
     fun dispose() {
         channel.setMethodCallHandler(null)
+        var shouldUnbind = false
+        val waiters = synchronized(serviceWaiters) {
+            if (disposed) {
+                emptyList()
+            } else {
+                disposed = true
+                shouldUnbind = true
+                binding = false
+                serviceBinder = null
+                serviceWaiters.toList().also { serviceWaiters.clear() }
+            }
+        }
+        waiters.forEach { it(null) }
+        if (shouldUnbind) {
+            try {
+                Shizuku.unbindUserService(serviceArgs, serviceConnection, true)
+            } catch (_: RuntimeException) {
+                // Service may already be gone; disposal remains idempotent.
+            }
+        }
         executor.shutdownNow()
-        serviceBinder = null
     }
 
     private data class NativeCommandResult(
@@ -534,6 +593,99 @@ internal object CloneProfileDiscovery {
             state = State.ready,
             userId = ownedUserId,
         )
+    }
+}
+
+internal object CloneProfileCreatePolicy {
+    enum class FailureState {
+        cloneProfileUnsupportedByOem,
+        operationFailed,
+    }
+
+    fun classifyFailure(stdout: String, stderr: String): FailureState {
+        val details = "${stdout}\n${stderr}".lowercase()
+        val mentionsCloneType =
+            details.contains("android.os.usertype.profile.clone") ||
+                details.contains("profile.clone")
+        if (!mentionsCloneType) return FailureState.operationFailed
+
+        val explicitlyUnsupported =
+            details.contains("unknown user type") ||
+                details.contains("unsupported user type") ||
+                (
+                    details.contains("user type") &&
+                        (
+                            details.contains("not available") ||
+                                details.contains("unavailable") ||
+                                details.contains("not supported") ||
+                                details.contains("unsupported") ||
+                                details.contains("disabled")
+                        )
+                )
+        return if (explicitlyUnsupported) {
+            FailureState.cloneProfileUnsupportedByOem
+        } else {
+            FailureState.operationFailed
+        }
+    }
+
+    fun verifyCreatedClone(
+        createStdout: String,
+        postCreateUsers: String,
+    ): CloneProfileDiscovery.Result {
+        val createdId = Regex("""(?:id\s+|UserInfo\{)(\d+)""")
+            .find(createStdout)
+            ?.groupValues
+            ?.getOrNull(1)
+            ?.toIntOrNull()
+            ?: return CloneProfileDiscovery.Result(
+                state = CloneProfileDiscovery.State.operationFailed,
+                userId = null,
+                message = "Clone profile was created but Android did not report its user id.",
+            )
+
+        val cloneIds = CloneProfileDiscovery.cloneProfileIds(postCreateUsers).distinct()
+        if (cloneIds.size != 1) {
+            return CloneProfileDiscovery.Result(
+                state = if (cloneIds.isEmpty()) {
+                    CloneProfileDiscovery.State.operationFailed
+                } else {
+                    CloneProfileDiscovery.State.conflicting
+                },
+                userId = cloneIds.firstOrNull(),
+                message = if (cloneIds.isEmpty()) {
+                    "Clone profile was created but could not be re-discovered."
+                } else {
+                    "Multiple clone profiles exist after creation; ownership is ambiguous."
+                },
+            )
+        }
+        if (cloneIds.single() != createdId) {
+            return CloneProfileDiscovery.Result(
+                state = CloneProfileDiscovery.State.conflicting,
+                userId = cloneIds.single(),
+                message = "Created clone identity does not match the discovered clone profile.",
+            )
+        }
+        return CloneProfileDiscovery.Result(
+            state = CloneProfileDiscovery.State.ready,
+            userId = createdId,
+        )
+    }
+}
+
+internal object CloneProfileStartPolicy {
+    fun failureMessage(
+        exitCode: Int,
+        stdout: String,
+        stderr: String,
+    ): String? {
+        if (exitCode == 0) return null
+        return listOf(stderr.trim(), stdout.trim())
+            .filter(String::isNotEmpty)
+            .joinToString("\n")
+            .ifBlank { "Clone profile user could not be started." }
+            .take(2048)
     }
 }
 

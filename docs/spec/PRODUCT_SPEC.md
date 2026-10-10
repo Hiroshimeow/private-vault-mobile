@@ -17,19 +17,19 @@ Private Vault Mobile is a local-first privacy utility for Android and iOS. It pr
 - No analytics, ads, remote backend, or cloud sync by default.
 
 ## V1.2 Android isolated apps
-- Android native app isolation is the primary multi-session path. It uses an official managed Work Profile owned by Private Vault as a Device Policy Controller (DPC).
-- Provisioning uses Android's managed-profile system UI. Private Vault never takes over an employer/other-DPC profile and fails closed when provisioning is unavailable or conflicting.
-- Personal and work app inventories remain separate. UI may join them by package name only to show whether the same package exists in each profile.
-- Eligible system apps are enabled in the work profile through supported DPC APIs.
-- Ordinary apps are copied as base + split APK material into a work-profile `PackageInstaller` session. Android may require explicit install-source/user confirmation; OEM or Play-store installation remains the fallback when direct copy is unavailable.
-- Work-profile controls include launch, freeze/unfreeze, hide/unhide where supported, work-only uninstall, and explicit destructive profile removal.
-- App data, accounts, and login state are not copied from the personal profile. The clone starts with separate Android-managed storage.
-- Locking Private Vault hides this app's UI but does not claim to stop an already-running cloned app. Freeze is a separate DPC operation.
-- Browser/WebView sessions remain a fallback for services that cannot be cloned or when the user chooses browser mode.
-- The Android implementation is independent and uses only platform APIs; Shelter/Insular GPL source is not vendored or copied.
+- Android native app isolation uses the official `android.os.usertype.profile.CLONE` user type when the OEM exposes it.
+- Private Vault performs only allowlisted clone/profile operations through an authorized Shizuku UserService. It does not provision, reuse, or fall back to a managed Work Profile.
+- Private Vault creates a clone profile only under the current Android user and persists ownership only after post-create discovery proves the created clone id unambiguously.
+- Any existing clone profile that is not proven to be the Private Vault-created id fails closed as `conflicting_external_clone_profile`; Private Vault never adopts, removes, or modifies it.
+- Package inventory, install-existing, launch, and uninstall are explicitly scoped to the proven clone user id.
+- Cloned packages start with separate private app data for that Android user. The product does not claim complete storage isolation because shared-storage behavior can vary by Android/OEM clone-profile implementation.
+- Shizuku unavailable/not authorized is `privilege_required`; explicit CLONE-type absence/unsupported evidence is `clone_profile_unsupported_by_oem`; ambiguous policy/capacity/create errors are `operation_failed`.
+- Locking Private Vault hides this app's UI but does not claim to stop an already-running cloned app.
+- Browser/WebView remains a separate user-selected surface, not a managed-profile fallback.
+- The Android implementation is independent; Shelter/Insular GPL source is not vendored or copied.
 
 ## Non-goals and platform limits
-- iOS does not expose Android-style managed Work Profile app cloning; Private Vault does not emulate or claim parity there.
+- iOS does not expose Android-style clone-profile app isolation; Private Vault does not emulate or claim parity there.
 - V1.2 does not bypass service restrictions, DRM, anti-abuse systems, enterprise policy, Android package verification, or OEM policy.
 - Embedded WebViews do not provide anonymity and can be blocked by services.
 - Android can expose only predeclared launcher aliases/icons/names.
@@ -54,9 +54,9 @@ Private Vault Mobile is a local-first privacy utility for Android and iOS. It pr
 4. Open vault item -> decrypt in memory -> view.
 5. Export -> explicit item action -> confirmation by default -> platform save. Confirmation may be explicitly disabled in Settings.
 6. Panic/background/timeout -> lock -> cover.
-7. Android Apps -> capability check -> provision managed Work Profile if allowed -> choose a personal app -> system-app enable or base+split APK installer flow -> Android confirmation when required -> independent work-profile app.
-8. Installed work app -> open / freeze / unfreeze / hide / unhide / uninstall from the work profile only.
-9. Remove work profile -> destructive confirmation -> Android removes all work-profile apps, accounts, and data while leaving personal-profile apps untouched.
+7. Android Apps -> clone capability check -> authorize Shizuku when required -> create and re-discover a real `profile.CLONE` if no owned clone exists -> choose a personal app -> install-existing into the proven clone user.
+8. Installed clone app -> start clone user -> resolve/launch or remove the package in that clone user only.
+9. Existing unowned/ambiguous clone profile -> fail closed; do not adopt, alter, or remove it.
 10. Browser logical profile -> clear shared WebView state on profile switch -> browse -> direct HTTPS responses can be saved into the vault. Authenticated WebView-cookie downloads are outside V1.
 
 ## Settings
@@ -66,4 +66,4 @@ Cover selection, panic enablement, shake sensitivity, face-down delay, auto-lock
 Semantic labels, minimum touch targets, keyboard-safe forms, scalable text, light/dark themes, and no color-only critical state indicators.
 
 ## Acceptance
-Security-critical behavior is test-first. CI must format, analyze, test, compile the Android DPC/Pigeon layer, build Android, and build iOS without codesign. README and threat model must describe limitations exactly. Work-profile E2E claims require emulator or physical-device evidence that actually provisions a managed profile; build/unit success alone is not labeled cloning E2E proof.
+Security-critical behavior is test-first. CI must format, analyze, test, compile the Android native layer, build Android, and build iOS without codesign. README and threat model must describe limitations exactly. Clone-profile E2E claims require a legal emulator or physical-device target that actually exposes `android.os.usertype.profile.CLONE` and Shizuku authorization; build/unit success alone is not labeled cloning E2E proof.

@@ -70,17 +70,45 @@ class PlatformCloneProfileClient implements CloneProfileClient {
   final MethodChannel channel;
 
   @override
-  Future<CloneProfileCapability> getCapability() async => _capability(
-    await channel.invokeMapMethod<String, Object?>('getCapability'),
-  );
+  Future<CloneProfileCapability> getCapability() async {
+    try {
+      return _capability(
+        await channel.invokeMapMethod<String, Object?>('getCapability'),
+      );
+    } on PlatformException catch (error) {
+      return _platformFailure(error);
+    } on MissingPluginException catch (error) {
+      return _platformFailure(error);
+    }
+  }
 
   @override
-  Future<bool> requestPrivilege() async =>
-      await channel.invokeMethod<bool>('requestPrivilege') ?? false;
+  Future<bool> requestPrivilege() async {
+    try {
+      return await channel.invokeMethod<bool>('requestPrivilege') ?? false;
+    } on PlatformException {
+      return false;
+    } on MissingPluginException {
+      return false;
+    }
+  }
 
   @override
   Future<CloneProfileAppList> listApps() async {
-    final value = await channel.invokeMapMethod<String, Object?>('listApps');
+    Map<String, Object?>? value;
+    try {
+      value = await channel.invokeMapMethod<String, Object?>('listApps');
+    } on PlatformException catch (error) {
+      return CloneProfileAppList(
+        capability: _platformFailure(error),
+        apps: const [],
+      );
+    } on MissingPluginException catch (error) {
+      return CloneProfileAppList(
+        capability: _platformFailure(error),
+        apps: const [],
+      );
+    }
     final capability = _capability(value);
     if (!capability.ready) {
       return CloneProfileAppList(capability: capability, apps: const []);
@@ -118,14 +146,34 @@ class PlatformCloneProfileClient implements CloneProfileClient {
     String method,
     String packageName,
   ) async {
-    final value = await channel.invokeMapMethod<String, Object?>(method, {
-      'packageName': packageName,
-    });
-    return CloneProfileOperationResult(
-      capability: _capability(value),
-      ok: value?['ok'] == true,
-    );
+    try {
+      final value = await channel.invokeMapMethod<String, Object?>(method, {
+        'packageName': packageName,
+      });
+      return CloneProfileOperationResult(
+        capability: _capability(value),
+        ok: value?['ok'] == true,
+      );
+    } on PlatformException catch (error) {
+      return CloneProfileOperationResult(
+        capability: _platformFailure(error),
+        ok: false,
+      );
+    } on MissingPluginException catch (error) {
+      return CloneProfileOperationResult(
+        capability: _platformFailure(error),
+        ok: false,
+      );
+    }
   }
+
+  CloneProfileCapability _platformFailure(Object error) =>
+      CloneProfileCapability(
+        state: CloneProfileCapabilityState.operationFailed,
+        message: error is PlatformException
+            ? error.message ?? 'Clone platform operation failed.'
+            : 'Clone platform operation is unavailable.',
+      );
 
   CloneProfileCapability _capability(Map<String, Object?>? value) {
     final raw = value?['state'];

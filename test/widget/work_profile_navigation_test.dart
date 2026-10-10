@@ -20,6 +20,7 @@ class _UnlockService implements UnlockService {
 class _FakeWorkProfileClient implements WorkProfileClient {
   int capabilityCalls = 0;
   int listCalls = 0;
+  int provisioningCalls = 0;
 
   @override
   Future<WorkProfileCapability> getCapability() async {
@@ -38,8 +39,10 @@ class _FakeWorkProfileClient implements WorkProfileClient {
   }
 
   @override
-  Future<WorkProfileOperationResult> startProvisioning() async =>
-      const WorkProfileOperationResult.success();
+  Future<WorkProfileOperationResult> startProvisioning() async {
+    provisioningCalls += 1;
+    return const WorkProfileOperationResult.success();
+  }
 
   @override
   Future<WorkProfileOperationResult> requestQuietModeDisabled() async =>
@@ -81,6 +84,38 @@ class _FakeWorkProfileClient implements WorkProfileClient {
       const WorkProfileOperationResult.success();
 }
 
+class _ConflictingCloneClient implements CloneProfileClient {
+  @override
+  Future<CloneProfileCapability> getCapability() async =>
+      const CloneProfileCapability(
+        state: CloneProfileCapabilityState.conflictingExternalCloneProfile,
+      );
+
+  @override
+  Future<CloneProfileAppList> listApps() async => const CloneProfileAppList(
+    capability: CloneProfileCapability(
+      state: CloneProfileCapabilityState.conflictingExternalCloneProfile,
+      message: 'external clone',
+    ),
+    apps: [],
+  );
+
+  @override
+  Future<bool> requestPrivilege() async => false;
+
+  @override
+  Future<CloneProfileOperationResult> clone(String packageName) =>
+      throw StateError('clone must not be called');
+
+  @override
+  Future<CloneProfileOperationResult> launch(String packageName) =>
+      throw StateError('launch must not be called');
+
+  @override
+  Future<CloneProfileOperationResult> uninstall(String packageName) =>
+      throw StateError('uninstall must not be called');
+}
+
 void main() {
   testWidgets('Android workspace promotes Apps before Browser after unlock', (
     tester,
@@ -102,6 +137,31 @@ void main() {
     final apps = tester.getCenter(find.text('Apps').last).dx;
     final browser = tester.getCenter(find.text('Browser').last).dx;
     expect(apps, lessThan(browser));
+  });
+
+  testWidgets('Clone conflict never falls back to managed Work Profile', (
+    tester,
+  ) async {
+    final lock = LockController()..unlock();
+    final work = _FakeWorkProfileClient();
+
+    await tester.pumpWidget(
+      PrivateVaultApp(
+        lockController: lock,
+        unlockService: _UnlockService(),
+        workProfileClient: work,
+        cloneProfileClient: _ConflictingCloneClient(),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('Apps').last);
+    await tester.pumpAndSettle();
+
+    expect(find.text('Existing clone profile detected'), findsOneWidget);
+    expect(work.capabilityCalls, 0);
+    expect(work.listCalls, 0);
+    expect(work.provisioningCalls, 0);
   });
 
   testWidgets('locked cover exposes no Apps or package inventory UI', (

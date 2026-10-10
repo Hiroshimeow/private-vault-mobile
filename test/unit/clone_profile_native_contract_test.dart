@@ -57,6 +57,36 @@ void main() {
       expect(bridge, contains('conflicting_external_clone_profile'));
       expect(bridge, contains('KEY_OWNED_CLONE_USER'));
       expect(service, contains('unsupported clone operation'));
+      expect(bridge, contains('Shizuku.unbindUserService'));
+      expect(
+        bridge,
+        contains('serviceWaiters.toList().also { serviceWaiters.clear() }'),
+      );
+      expect(bridge, contains('waiters.forEach { it(null) }'));
+      expect(bridge, contains('CloneProfileStartPolicy.failureMessage'));
+      expect(bridge, contains('CloneProfileCreatePolicy.verifyCreatedClone'));
+
+      final proofIndex = bridge.indexOf(
+        'CloneProfileCreatePolicy.verifyCreatedClone',
+      );
+      final persistIndex = bridge.indexOf('putInt(KEY_OWNED_CLONE_USER');
+      expect(proofIndex, greaterThanOrEqualTo(0));
+      expect(persistIndex, greaterThan(proofIndex));
+
+      final firstStartCheck = bridge.indexOf(
+        'CloneProfileStartPolicy.failureMessage',
+      );
+      final installIndex = bridge.indexOf('"install-existing"');
+      final secondStartCheck = bridge.indexOf(
+        'CloneProfileStartPolicy.failureMessage',
+        firstStartCheck + 1,
+      );
+      final launchIndex = bridge.indexOf('"launch"', secondStartCheck + 1);
+      expect(firstStartCheck, greaterThanOrEqualTo(0));
+      expect(installIndex, greaterThan(firstStartCheck));
+      expect(secondStartCheck, greaterThan(firstStartCheck));
+      expect(launchIndex, greaterThan(secondStartCheck));
+
       expect(bridge, isNot(contains('UserHandle.myUserId')));
       expect(bridge, isNot(contains('myUserHandle().identifier')));
       expect(service, isNot(contains('new String[]{"sh", "-c"')));

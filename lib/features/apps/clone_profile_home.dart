@@ -45,12 +45,19 @@ class _CloneProfileHomeState extends State<CloneProfileHome> {
   }
 
   Future<void> _requestPrivilege() async {
-    final granted = await widget.client.requestPrivilege();
-    if (!mounted) return;
-    setState(() {
-      _message = granted ? 'Privileged clone access granted.' : 'Shizuku authorization is required for real Android clone profiles.';
-    });
-    if (granted) await _refresh();
+    try {
+      final granted = await widget.client.requestPrivilege();
+      if (!mounted) return;
+      setState(() {
+        _message = granted ? 'Privileged clone access granted.' : 'Shizuku authorization is required for real Android clone profiles.';
+      });
+      if (granted) await _refresh();
+    } on Object {
+      if (!mounted) return;
+      setState(() {
+        _message = 'Shizuku authorization failed.';
+      });
+    }
   }
 
   Future<void> _run(
@@ -72,6 +79,11 @@ class _CloneProfileHomeState extends State<CloneProfileHome> {
             : result.capability.message ?? 'Clone operation failed.';
       });
       if (result.ok) await _refresh();
+    } on Object {
+      if (!mounted) return;
+      setState(() {
+        _message = 'Clone operation failed.';
+      });
     } finally {
       if (mounted) setState(() => _operationInFlight = false);
     }
