@@ -42,6 +42,7 @@ export interface AppSettings {
   darkMode: boolean;
   decoyPinEnabled: boolean;
   hideNotifications: boolean;
+  lockDisabled?: boolean;
 }
 
 export const DEFAULT_SETTINGS: AppSettings = {
@@ -60,6 +61,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   darkMode: true,
   decoyPinEnabled: false,
   hideNotifications: true,
+  lockDisabled: false,
 };
 
 export interface BrowserProfile {

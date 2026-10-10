@@ -8,9 +8,35 @@ export class LockController {
   private _confidentialityBoundary: (() => void) | null = null;
   private _listeners: Set<Listener> = new Set();
   public backgroundLock = true;
+  private _isSuspended = false;
+  private _lockDisabled = false;
 
   get isLocked(): boolean {
     return this._isLocked;
+  }
+
+  get isSuspended(): boolean {
+    return this._isSuspended;
+  }
+
+  suspendLock(suspended = true): void {
+    this._isSuspended = suspended;
+    if (suspended && this._backgroundTimer) {
+      clearTimeout(this._backgroundTimer);
+      this._backgroundTimer = null;
+    }
+  }
+
+  get isLockDisabled(): boolean {
+    return this._lockDisabled;
+  }
+
+  setLockDisabled(disabled: boolean): void {
+    this._lockDisabled = disabled;
+    if (disabled && this._isLocked) {
+      this._isLocked = false;
+      this.notify();
+    }
   }
 
   subscribe(listener: Listener): () => void {
@@ -46,7 +72,8 @@ export class LockController {
     this.notify();
   }
 
-  lock(): void {
+  lock(force = false): void {
+    if (!force && this._lockDisabled) return;
     if (this._backgroundTimer) {
       clearTimeout(this._backgroundTimer);
       this._backgroundTimer = null;
@@ -60,11 +87,11 @@ export class LockController {
   }
 
   panic(): void {
-    this.lock();
+    this.lock(true);
   }
 
   onBackground(delayMs = 0): void {
-    if (!this.backgroundLock || this._isLocked) return;
+    if (this._lockDisabled || this._isSuspended || !this.backgroundLock || this._isLocked) return;
     if (this._backgroundTimer) {
       clearTimeout(this._backgroundTimer);
     }

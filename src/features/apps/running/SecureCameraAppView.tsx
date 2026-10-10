@@ -23,15 +23,51 @@ export const SecureCameraAppView: React.FC<SecureCameraAppViewProps> = ({
 }) => {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
+  const nativeCameraInputRef = useRef<HTMLInputElement | null>(null);
   const [facingMode, setFacingMode] = useState<'user' | 'environment'>('environment');
   const [flashEnabled, setFlashEnabled] = useState(false);
   const [lastPhotoUrl, setLastPhotoUrl] = useState<string | null>(null);
   const [isCapturing, setIsCapturing] = useState(false);
+  const [hasStream, setHasStream] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
 
   const showToast = (msg: string) => {
     setToast(msg);
-    setTimeout(() => setToast(null), 3000);
+    setTimeout(() => setToast(null), 3500);
+  };
+
+  const handleOpenNativeCamera = () => {
+    window.dispatchEvent(new CustomEvent('vault-suspend-lock', { detail: true }));
+    nativeCameraInputRef.current?.click();
+  };
+
+  const handleNativePhotoCapture = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) {
+      setTimeout(() => {
+        window.dispatchEvent(new CustomEvent('vault-suspend-lock', { detail: false }));
+      }, 500);
+      return;
+    }
+    try {
+      const buffer = await file.arrayBuffer();
+      const bytes = new Uint8Array(buffer);
+      const name = `IMG_${new Date().toISOString().replace(/[:.]/g, '-')}.jpg`;
+      await repository.addBytes(bytes, {
+        kind: 'image',
+        name,
+        mimeType: file.type || 'image/jpeg',
+        album: 'Máy ảnh',
+      });
+      showToast('Đã chụp và mã hóa ảnh vào Thư mục Bảo mật');
+    } catch {
+      showToast('Lỗi khi lưu ảnh');
+    } finally {
+      if (nativeCameraInputRef.current) nativeCameraInputRef.current.value = '';
+      setTimeout(() => {
+        window.dispatchEvent(new CustomEvent('vault-suspend-lock', { detail: false }));
+      }, 1000);
+    }
   };
 
   const stopStream = () => {
@@ -39,6 +75,7 @@ export const SecureCameraAppView: React.FC<SecureCameraAppViewProps> = ({
       streamRef.current.getTracks().forEach((t) => t.stop());
       streamRef.current = null;
     }
+    setHasStream(false);
   };
 
   const startStream = async (mode: 'user' | 'environment') => {
@@ -51,6 +88,7 @@ export const SecureCameraAppView: React.FC<SecureCameraAppViewProps> = ({
       if (videoRef.current) {
         videoRef.current.srcObject = stream;
         videoRef.current.play();
+        setHasStream(true);
       }
     } catch {
       try {
@@ -59,10 +97,12 @@ export const SecureCameraAppView: React.FC<SecureCameraAppViewProps> = ({
         if (videoRef.current) {
           videoRef.current.srcObject = stream;
           videoRef.current.play();
+          setHasStream(true);
         }
       } catch (err) {
         console.error('Camera failed:', err);
-        showToast('Không thể kết nối máy ảnh thiết bị');
+        setHasStream(false);
+        showToast('Chưa có quyền máy ảnh. Bạn có thể dùng nút "Camera máy" bên dưới.');
       }
     }
   };
@@ -143,6 +183,15 @@ export const SecureCameraAppView: React.FC<SecureCameraAppViewProps> = ({
 
   return (
     <div className="flex flex-col h-full bg-black text-white select-none overflow-hidden font-sans relative">
+      <input
+        type="file"
+        ref={nativeCameraInputRef}
+        onChange={handleNativePhotoCapture}
+        accept="image/*"
+        capture="environment"
+        className="hidden"
+      />
+
       {/* Viewfinder Header */}
       <div className="absolute top-0 inset-x-0 z-20 flex items-center justify-between p-4 bg-gradient-to-b from-black/80 to-transparent">
         <button
@@ -156,6 +205,15 @@ export const SecureCameraAppView: React.FC<SecureCameraAppViewProps> = ({
         </button>
 
         <div className="flex items-center gap-2">
+          <button
+            onClick={handleOpenNativeCamera}
+            className="px-3 py-1.5 rounded-xl bg-teal-500/20 border border-teal-500/50 text-teal-300 text-xs font-semibold hover:bg-teal-500/30 transition-colors flex items-center gap-1.5"
+            title="Dùng ứng dụng camera mặc định của điện thoại"
+          >
+            <Camera className="w-3.5 h-3.5" />
+            <span>Camera máy</span>
+          </button>
+
           <button
             onClick={() => setFlashEnabled(!flashEnabled)}
             className="p-2 rounded-full bg-black/40 backdrop-blur-md hover:bg-black/60 transition-colors text-amber-300"
@@ -179,8 +237,30 @@ export const SecureCameraAppView: React.FC<SecureCameraAppViewProps> = ({
           playsInline
           autoPlay
           muted
-          className="w-full h-full object-cover"
+          className={`w-full h-full object-cover ${hasStream ? 'block' : 'hidden'}`}
         />
+
+        {!hasStream && (
+          <div className="p-6 flex flex-col items-center justify-center text-center space-y-4 max-w-xs">
+            <div className="w-16 h-16 rounded-full bg-zinc-900 border border-zinc-800 flex items-center justify-center text-zinc-400">
+              <Camera className="w-8 h-8" />
+            </div>
+            <div>
+              <h3 className="text-sm font-bold text-white">Máy ảnh chưa kết nối</h3>
+              <p className="text-xs text-zinc-400 mt-1">
+                Do quyền truy cập thiết bị hoặc phiên bản Android. Bạn có thể chụp trực tiếp bằng ứng dụng máy ảnh gốc của máy.
+              </p>
+            </div>
+            <button
+              onClick={handleOpenNativeCamera}
+              className="px-5 py-2.5 rounded-2xl bg-teal-500 hover:bg-teal-400 text-zinc-950 font-bold text-xs flex items-center gap-2 shadow-lg active:scale-95 transition-all"
+            >
+              <Camera className="w-4 h-4" />
+              <span>Mở Camera thiết bị</span>
+            </button>
+          </div>
+        )}
+
         {isCapturing && (
           <div className="absolute inset-0 bg-white animate-in fade-in duration-100 opacity-80 pointer-events-none" />
         )}

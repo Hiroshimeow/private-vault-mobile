@@ -56,9 +56,19 @@ export const SecureFilesAppView: React.FC<SecureFilesAppViewProps> = ({
     return true;
   });
 
+  const handleOpenPicker = () => {
+    window.dispatchEvent(new CustomEvent('vault-suspend-lock', { detail: true }));
+    fileInputRef.current?.click();
+  };
+
   const handleImportFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
-    if (!files || files.length === 0) return;
+    if (!files || files.length === 0) {
+      setTimeout(() => {
+        window.dispatchEvent(new CustomEvent('vault-suspend-lock', { detail: false }));
+      }, 500);
+      return;
+    }
     setIsImporting(true);
 
     try {
@@ -86,6 +96,9 @@ export const SecureFilesAppView: React.FC<SecureFilesAppViewProps> = ({
     } finally {
       setIsImporting(false);
       if (fileInputRef.current) fileInputRef.current.value = '';
+      setTimeout(() => {
+        window.dispatchEvent(new CustomEvent('vault-suspend-lock', { detail: false }));
+      }, 1000);
     }
   };
 
@@ -174,13 +187,17 @@ export const SecureFilesAppView: React.FC<SecureFilesAppViewProps> = ({
         </div>
 
         <button
-          onClick={() => fileInputRef.current?.click()}
+          onClick={handleOpenPicker}
           disabled={isImporting}
           className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-white/20 hover:bg-white/30 text-white text-xs font-semibold"
         >
           <Plus className="w-4 h-4" />
           <span>{isImporting ? 'Đang nhập...' : 'Nhập tệp'}</span>
         </button>
+      </div>
+
+      <div className="px-3 py-2 bg-teal-950/30 border-b border-teal-800/40 text-[11px] text-teal-300 flex items-center justify-between">
+        <span>✓ Tệp gốc trên máy được bảo toàn 100%, app sao chép an toàn vào Vault.</span>
       </div>
 
       {/* Search Bar */}

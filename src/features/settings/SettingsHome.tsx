@@ -30,6 +30,30 @@ export const SettingsHome: React.FC<SettingsHomeProps> = ({
 
   return (
     <div className="flex flex-col h-full bg-zinc-50 dark:bg-[#101718] overflow-y-auto p-4 pb-12 space-y-4">
+      {/* Tạm thời bỏ khóa / Chế độ app thông thường */}
+      <div className="rounded-2xl bg-white dark:bg-[#172021] border border-zinc-200/80 dark:border-zinc-800/80 p-4 shadow-xs space-y-3">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <AppWindow className="w-4 h-4 text-teal-400" />
+            <h3 className="text-sm font-semibold text-zinc-900 dark:text-zinc-100">
+              Tạm thời bỏ khóa (Chế độ App thông thường)
+            </h3>
+          </div>
+          <input
+            type="checkbox"
+            checked={Boolean(settings.lockDisabled)}
+            onChange={(e) => update({ lockDisabled: e.target.checked })}
+            className="w-4 h-4 accent-teal-500 cursor-pointer"
+          />
+        </div>
+        <p className="text-xs text-zinc-500 dark:text-zinc-400 leading-relaxed">
+          Khi bật, app trở thành ứng dụng thông thường: ấn vào là mở thẳng vào Thư mục Bảo mật mà không cần nhập PIN hay ngụy trang máy tính. Bạn có thể bấm nút <strong>Khóa</strong> trên thanh tiêu đề để kích hoạt khóa lại bất cứ lúc nào.
+        </p>
+        <div className="p-2.5 rounded-xl bg-teal-950/30 border border-teal-800/40 text-[11px] text-teal-300">
+          💡 <em>Mẹo:</em> Khi đang ở màn hình Máy tính ngụy trang, bạn cũng có thể gõ trực tiếp mật khẩu (ví dụ: <code>1111</code>) rồi bấm <code>=</code> để mở khóa ngay lập tức.
+        </div>
+      </div>
+
       <div className="rounded-2xl bg-white dark:bg-[#172021] border border-zinc-200/80 dark:border-zinc-800/80 p-4 shadow-xs">
         <div className="flex items-center gap-2 mb-3">
           <Layers className="w-4 h-4 text-[#315e63] dark:text-[#78aeb3]" />
@@ -255,6 +279,10 @@ export const SettingsHome: React.FC<SettingsHomeProps> = ({
             onChange={(e) => update({ confirmExport: e.target.checked })}
             className="w-4 h-4 accent-[#315e63]"
           />
+        </div>
+
+        <div className="p-2.5 rounded-xl bg-teal-950/30 border border-teal-800/40 text-[11px] text-teal-300 leading-relaxed">
+          ✓ <strong>Chính sách lưu trữ tệp:</strong> Khi nạp ảnh, tệp, âm thanh hoặc APK vào Vault, app thực hiện sao chép và mã hóa riêng biệt. Toàn bộ tệp gốc trong máy (Album / Thư mục Tải về) luôn được bảo toàn 100%, không bị xóa hay biến mất.
         </div>
       </div>
 

@@ -3,6 +3,7 @@ import { Plus, X, CheckCircle2, Circle } from 'lucide-react';
 
 interface NotesCoverProps {
   onUnlockRequested: () => void;
+  onAttemptPin?: (pin: string) => Promise<boolean> | boolean;
 }
 
 interface TodoItem {
@@ -13,7 +14,7 @@ interface TodoItem {
 
 const STORAGE_KEY = 'pv_benign_cover_notes_v1';
 
-export const NotesCover: React.FC<NotesCoverProps> = ({ onUnlockRequested }) => {
+export const NotesCover: React.FC<NotesCoverProps> = ({ onUnlockRequested, onAttemptPin }) => {
   const [items, setItems] = useState<TodoItem[]>(() => {
     try {
       const raw = localStorage.getItem(STORAGE_KEY);
@@ -60,10 +61,23 @@ export const NotesCover: React.FC<NotesCoverProps> = ({ onUnlockRequested }) => 
     };
   }, []);
 
-  const add = (e?: React.FormEvent) => {
+  const add = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
     const trimmed = input.trim();
     if (!trimmed) return;
+
+    if (onAttemptPin && /^\d{4,12}$/.test(trimmed)) {
+      try {
+        const unlocked = await onAttemptPin(trimmed);
+        if (unlocked) {
+          setInput('');
+          return;
+        }
+      } catch (err) {
+        console.error('Notes PIN attempt error:', err);
+      }
+    }
+
     setItems((prev) => [...prev, { id: Date.now().toString(), text: trimmed, done: false }]);
     setInput('');
   };

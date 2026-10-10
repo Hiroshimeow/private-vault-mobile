@@ -81,11 +81,53 @@ export const VaultGallery: React.FC<VaultGalleryProps> = ({
   const cameraStreamRef = useRef<MediaStream | null>(null);
 
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const nativeCameraInputRef = useRef<HTMLInputElement | null>(null);
   const [notification, setNotification] = useState<string | null>(null);
 
   const showToast = (msg: string) => {
     setNotification(msg);
-    setTimeout(() => setNotification(null), 3000);
+    setTimeout(() => setNotification(null), 3500);
+  };
+
+  const handleOpenImport = () => {
+    window.dispatchEvent(new CustomEvent('vault-suspend-lock', { detail: true }));
+    fileInputRef.current?.click();
+  };
+
+  const handleOpenNativeCamera = () => {
+    window.dispatchEvent(new CustomEvent('vault-suspend-lock', { detail: true }));
+    nativeCameraInputRef.current?.click();
+  };
+
+  const handleNativeCameraPhoto = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) {
+      setTimeout(() => {
+        window.dispatchEvent(new CustomEvent('vault-suspend-lock', { detail: false }));
+      }, 500);
+      return;
+    }
+    try {
+      const buffer = await file.arrayBuffer();
+      const bytes = new Uint8Array(buffer);
+      const name = `Camera_${Date.now()}.jpg`;
+      await repository.addBytes(bytes, {
+        kind: 'image',
+        name,
+        mimeType: file.type || 'image/jpeg',
+        album: 'Máy ảnh',
+        isFavorite: false,
+      });
+      showToast('Ảnh chụp đã được mã hóa vào Album Máy ảnh bảo mật');
+      await loadMedia();
+    } catch {
+      showToast('Lỗi khi lưu ảnh chụp');
+    } finally {
+      if (nativeCameraInputRef.current) nativeCameraInputRef.current.value = '';
+      setTimeout(() => {
+        window.dispatchEvent(new CustomEvent('vault-suspend-lock', { detail: false }));
+      }, 1000);
+    }
   };
 
   const loadMedia = async () => {
@@ -259,11 +301,7 @@ export const VaultGallery: React.FC<VaultGalleryProps> = ({
         successCount++;
       }
 
-      if (importMode === 'move') {
-        showToast(`Đã mã hóa và xác minh ${successCount} tệp. Chế độ Di chuyển: Tệp gốc được giữ an toàn trên thiết bị (yêu cầu quyền Android SAF để tự động xóa).`);
-      } else {
-        showToast(`Đã sao chép và mã hóa ${successCount} tệp vào album "${targetAlbum}"`);
-      }
+      showToast(`Đã sao chép an toàn & mã hóa ${successCount} tệp vào album "${targetAlbum}". Tệp gốc trong máy được bảo toàn 100%.`);
       await loadMedia();
     } catch (err) {
       console.error(err);
@@ -271,6 +309,9 @@ export const VaultGallery: React.FC<VaultGalleryProps> = ({
     } finally {
       setImportProgress(null);
       if (fileInputRef.current) fileInputRef.current.value = '';
+      setTimeout(() => {
+        window.dispatchEvent(new CustomEvent('vault-suspend-lock', { detail: false }));
+      }, 1000);
     }
   };
 
@@ -575,6 +616,14 @@ export const VaultGallery: React.FC<VaultGalleryProps> = ({
         accept="image/*,video/*"
         className="hidden"
       />
+      <input
+        type="file"
+        ref={nativeCameraInputRef}
+        onChange={handleNativeCameraPhoto}
+        accept="image/*"
+        capture="environment"
+        className="hidden"
+      />
 
       {/* Batch Import Progress Bar Overlay */}
       {importProgress && (
@@ -585,7 +634,7 @@ export const VaultGallery: React.FC<VaultGalleryProps> = ({
               Đang mã hóa tệp ({importProgress.current}/{importProgress.total})
             </span>
             <span className="text-[10px] text-teal-400/90 font-mono">
-              AES-256 mã hóa trực tiếp vào Vault
+              AES-256 mã hóa an toàn · Giữ nguyên tệp gốc trong máy
             </span>
           </div>
         </div>
@@ -634,15 +683,15 @@ export const VaultGallery: React.FC<VaultGalleryProps> = ({
           <button
             onClick={startCamera}
             className="p-2 rounded-xl text-zinc-400 hover:text-white hover:bg-zinc-800/60 transition-colors"
-            title="Chụp ảnh bảo mật"
+            title="Chụp ảnh trực tiếp"
           >
             <Camera className="w-4 h-4" />
           </button>
 
           <button
-            onClick={() => fileInputRef.current?.click()}
+            onClick={handleOpenImport}
             className="p-2 rounded-xl text-zinc-400 hover:text-white hover:bg-zinc-800/60 transition-colors"
-            title="Nhập ảnh vào Vault"
+            title="Sao chép ảnh từ máy vào Vault"
           >
             <Plus className="w-4 h-4" />
           </button>
@@ -1205,12 +1254,22 @@ export const VaultGallery: React.FC<VaultGalleryProps> = ({
             <video ref={videoRef} playsInline autoPlay className="w-full h-full object-cover" />
           </div>
 
-          <div className="p-6 bg-black/90 flex items-center justify-center gap-6">
+          <div className="p-6 bg-black/90 flex flex-col items-center gap-3">
             <button
               onClick={capturePhoto}
               className="w-18 h-18 rounded-full border-4 border-white flex items-center justify-center hover:bg-white/20 active:scale-95 transition-all"
             >
               <div className="w-14 h-14 rounded-full bg-teal-400" />
+            </button>
+            <button
+              onClick={() => {
+                stopCamera();
+                handleOpenNativeCamera();
+              }}
+              className="text-xs text-teal-300 hover:text-white flex items-center gap-1.5 py-1 px-3 rounded-lg bg-zinc-900 border border-zinc-700"
+            >
+              <Camera className="w-3.5 h-3.5" />
+              <span>Chụp bằng ứng dụng Máy ảnh máy (Native)</span>
             </button>
           </div>
         </div>

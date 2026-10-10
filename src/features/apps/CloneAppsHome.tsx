@@ -87,7 +87,12 @@ export const CloneAppsHome: React.FC<CloneAppsHomeProps> = ({
 
   const handleSelectApkFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
-    if (!file) return;
+    if (!file) {
+      setTimeout(() => {
+        window.dispatchEvent(new CustomEvent('vault-suspend-lock', { detail: false }));
+      }, 500);
+      return;
+    }
 
     setIsProcessingApk(true);
     setApkError(null);
@@ -114,14 +119,22 @@ export const CloneAppsHome: React.FC<CloneAppsHomeProps> = ({
       setApps(nextApps);
       cloneService.saveApps(nextApps);
 
-      showToast(`Đã xác minh và mã hóa tệp APK "${meta.appName}" vào Vault.`);
+      showToast(`Đã sao chép và mã hóa gói APK "${meta.appName}" vào Vault.`);
       setIsAddApkModalOpen(false);
     } catch (err) {
       setApkError(err instanceof Error ? err.message : 'Tệp APK không hợp lệ.');
     } finally {
       setIsProcessingApk(false);
       if (apkFileInputRef.current) apkFileInputRef.current.value = '';
+      setTimeout(() => {
+        window.dispatchEvent(new CustomEvent('vault-suspend-lock', { detail: false }));
+      }, 1000);
     }
+  };
+
+  const handleOpenApkPicker = () => {
+    window.dispatchEvent(new CustomEvent('vault-suspend-lock', { detail: true }));
+    apkFileInputRef.current?.click();
   };
 
   const handleDeleteApp = async (app: CloneApp, e: React.MouseEvent) => {
@@ -359,9 +372,13 @@ export const CloneAppsHome: React.FC<CloneAppsHomeProps> = ({
               </div>
             )}
 
+            <div className="p-2.5 rounded-xl bg-teal-950/40 border border-teal-800/40 text-[11px] text-teal-300">
+              ✓ <strong>Bảo toàn tệp gốc:</strong> Tệp .APK trên điện thoại không bị xóa hoặc di chuyển; app chỉ đọc và sao chép an toàn vào Thư mục Bảo mật.
+            </div>
+
             <div className="pt-2">
               <button
-                onClick={() => apkFileInputRef.current?.click()}
+                onClick={handleOpenApkPicker}
                 disabled={isProcessingApk}
                 className="w-full py-3 rounded-xl bg-teal-500 hover:bg-teal-400 text-zinc-950 font-bold text-xs flex items-center justify-center gap-2 shadow-sm disabled:opacity-50"
               >

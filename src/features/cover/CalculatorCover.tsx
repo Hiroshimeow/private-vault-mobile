@@ -2,11 +2,12 @@ import React, { useState, useRef, useEffect } from 'react';
 
 interface CalculatorCoverProps {
   onUnlockRequested: () => void;
+  onAttemptPin?: (pin: string) => Promise<boolean> | boolean;
 }
 
 type CalculatorKeyRole = 'number' | 'operator' | 'destructive' | 'equals';
 
-export const CalculatorCover: React.FC<CalculatorCoverProps> = ({ onUnlockRequested }) => {
+export const CalculatorCover: React.FC<CalculatorCoverProps> = ({ onUnlockRequested, onAttemptPin }) => {
   const [display, setDisplay] = useState('0');
   const [left, setLeft] = useState<number | null>(null);
   const [operator, setOperator] = useState<string | null>(null);
@@ -108,7 +109,19 @@ export const CalculatorCover: React.FC<CalculatorCoverProps> = ({ onUnlockReques
     setReplace(true);
   };
 
-  const equals = () => {
+  const equals = async () => {
+    // Check if the current display matches Master or Decoy PIN directly
+    if (onAttemptPin && /^\d{4,12}$/.test(display)) {
+      try {
+        const unlocked = await onAttemptPin(display);
+        if (unlocked) {
+          return;
+        }
+      } catch (err) {
+        console.error('Direct PIN verification failed:', err);
+      }
+    }
+
     const calculated = applyPending(left, operator, display);
     setDisplay(calculated);
     setOperator(null);

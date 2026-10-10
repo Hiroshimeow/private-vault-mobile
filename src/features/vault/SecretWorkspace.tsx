@@ -69,14 +69,21 @@ export const SecretWorkspace: React.FC<SecretWorkspaceProps> = ({
             <span>{titles[activeTab]}</span>
           </h1>
         </div>
-        <button
-          onClick={onLock}
-          title="Khóa ngay lập tức"
-          className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl border border-zinc-700 bg-zinc-800/80 text-zinc-200 text-xs font-semibold hover:bg-zinc-700 active:scale-95 transition-all shadow-xs"
-        >
-          <Lock className="w-3.5 h-3.5 text-teal-400" />
-          <span>Khóa</span>
-        </button>
+        <div className="flex items-center gap-2">
+          {settings.lockDisabled && (
+            <span className="text-[10px] px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-300 font-medium border border-amber-500/30">
+              Đang tắt khóa
+            </span>
+          )}
+          <button
+            onClick={onLock}
+            title={settings.lockDisabled ? "Khóa và kích hoạt lại mật khẩu" : "Khóa ngay lập tức"}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl border border-zinc-700 bg-zinc-800/80 text-zinc-200 text-xs font-semibold hover:bg-zinc-700 active:scale-95 transition-all shadow-xs"
+          >
+            <Lock className="w-3.5 h-3.5 text-teal-400" />
+            <span>{settings.lockDisabled ? "Bật lại khóa" : "Khóa"}</span>
+          </button>
+        </div>
       </header>
 
       {/* Main Content Body with Persistent Keep-Alive Tabs */}

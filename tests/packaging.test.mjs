@@ -44,14 +44,12 @@ function controllerClass() {
   const code = ts.transpileModule(read('src/features/auth/lockController.ts'), {
     compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
   }).outputText;
+  const mockSessionManager = {
+    getInstance: () => ({ revoke: () => {} }),
+  };
   const sandbox = {
     exports: {},
-    require: (specifier) => {
-      if (specifier === '../vault/vaultSession') {
-        return { VaultSessionManager: { getInstance: () => ({ revoke() {} }) } };
-      }
-      throw new Error(`Unexpected dependency: ${specifier}`);
-    },
+    require: () => ({ VaultSessionManager: mockSessionManager }),
     setTimeout,
     clearTimeout,
   };

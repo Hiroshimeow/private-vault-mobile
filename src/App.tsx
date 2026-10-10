@@ -52,6 +52,35 @@ export const App: React.FC = () => {
   }, [lockController, settings]);
 
   useEffect(() => {
+    if (settings.lockDisabled) {
+      lockController.setLockDisabled(true);
+    } else {
+      lockController.setLockDisabled(false);
+    }
+  }, [settings.lockDisabled, lockController]);
+
+  useEffect(() => {
+    const handleSuspend = (e: Event) => {
+      const customEvent = e as CustomEvent<boolean>;
+      lockController.suspendLock(customEvent.detail !== false);
+    };
+    const handleWindowFocus = () => {
+      // Grace period when returning to app from system picker / camera
+      setTimeout(() => {
+        lockController.suspendLock(false);
+      }, 1000);
+    };
+
+    window.addEventListener('vault-suspend-lock', handleSuspend);
+    window.addEventListener('focus', handleWindowFocus);
+
+    return () => {
+      window.removeEventListener('vault-suspend-lock', handleSuspend);
+      window.removeEventListener('focus', handleWindowFocus);
+    };
+  }, [lockController]);
+
+  useEffect(() => {
     const handleVisibilityChange = () => {
       if (document.hidden) {
         lockController.onBackground(settings.autoLockSeconds * 1000);
@@ -69,6 +98,7 @@ export const App: React.FC = () => {
   const handleSettingsChanged = (next: AppSettings) => {
     setSettings(next);
     settingsStore.save(next);
+    lockController.setLockDisabled(Boolean(next.lockDisabled));
     if (panicSensorRef.current) {
       panicSensorRef.current.updateSettings(next);
     }
@@ -76,8 +106,35 @@ export const App: React.FC = () => {
 
   const handleResetPin = async () => {
     await unlockService.reset();
-    lockController.lock();
+    lockController.lock(true);
     setIsUnlockModalOpen(true);
+  };
+
+  const handleAttemptPin = async (candidate: string): Promise<boolean> => {
+    try {
+      const result = await unlockService.unlock(candidate);
+      if (result.success) {
+        if (result.isDecoy) {
+          // Decoy PIN entered
+          return false;
+        }
+        lockController.unlock();
+        return true;
+      }
+      return false;
+    } catch (err) {
+      console.error('Error verifying PIN:', err);
+      return false;
+    }
+  };
+
+  const handleManualLock = () => {
+    if (settings.lockDisabled) {
+      // If user manually taps Lock while in disabled lock mode, turn lock back on
+      const nextSettings = { ...settings, lockDisabled: false };
+      handleSettingsChanged(nextSettings);
+    }
+    lockController.lock(true);
   };
 
   return (
@@ -85,13 +142,19 @@ export const App: React.FC = () => {
       <div className="w-full h-full bg-white dark:bg-[#101718] flex flex-col relative overflow-hidden">
         {isLocked ? (
           settings.cover === 'notes' ? (
-            <NotesCover onUnlockRequested={() => setIsUnlockModalOpen(true)} />
+            <NotesCover
+              onUnlockRequested={() => setIsUnlockModalOpen(true)}
+              onAttemptPin={handleAttemptPin}
+            />
           ) : (
-            <CalculatorCover onUnlockRequested={() => setIsUnlockModalOpen(true)} />
+            <CalculatorCover
+              onUnlockRequested={() => setIsUnlockModalOpen(true)}
+              onAttemptPin={handleAttemptPin}
+            />
           )
         ) : (
           <SecretWorkspace
-            onLock={() => lockController.lock()}
+            onLock={handleManualLock}
             settings={settings}
             onSettingsChanged={handleSettingsChanged}
             vaultRepository={vaultRepository}

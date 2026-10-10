@@ -36,11 +36,47 @@ export const SecureAudioRecorder: React.FC<SecureAudioRecorderProps> = ({
   const audioChunksRef = useRef<Blob[]>([]);
   const timerIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const audioPlayerRef = useRef<HTMLAudioElement | null>(null);
+  const audioFileInputRef = useRef<HTMLInputElement | null>(null);
   const recordStartTimeRef = useRef<number>(0);
 
   const showToast = (msg: string) => {
     setToast(msg);
-    setTimeout(() => setToast(null), 3000);
+    setTimeout(() => setToast(null), 3500);
+  };
+
+  const handleOpenAudioPicker = () => {
+    window.dispatchEvent(new CustomEvent('vault-suspend-lock', { detail: true }));
+    audioFileInputRef.current?.click();
+  };
+
+  const handleImportAudioFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) {
+      setTimeout(() => {
+        window.dispatchEvent(new CustomEvent('vault-suspend-lock', { detail: false }));
+      }, 500);
+      return;
+    }
+    try {
+      const buffer = await file.arrayBuffer();
+      const bytes = new Uint8Array(buffer);
+      await repository.addBytes(bytes, {
+        kind: 'audio',
+        name: file.name,
+        mimeType: file.type || 'audio/mp4',
+        album: 'Ghi âm bảo mật',
+        duration: 'Tệp nhập',
+      });
+      showToast('Đã sao chép và mã hóa tệp âm thanh vào Vault');
+      await loadRecordings();
+    } catch {
+      showToast('Lỗi khi nạp tệp âm thanh');
+    } finally {
+      if (audioFileInputRef.current) audioFileInputRef.current.value = '';
+      setTimeout(() => {
+        window.dispatchEvent(new CustomEvent('vault-suspend-lock', { detail: false }));
+      }, 1000);
+    }
   };
 
   const loadRecordings = async () => {
@@ -247,6 +283,14 @@ export const SecureAudioRecorder: React.FC<SecureAudioRecorderProps> = ({
         onEnded={() => setActivePlayId(null)}
         className="hidden"
       />
+      <input
+        type="file"
+        ref={audioFileInputRef}
+        accept="audio/*"
+        capture="microphone"
+        onChange={handleImportAudioFile}
+        className="hidden"
+      />
 
       {/* Header */}
       <div className="bg-[#141e21] text-white px-3.5 py-3 flex items-center justify-between border-b border-zinc-800 shadow-md shrink-0">
@@ -259,6 +303,13 @@ export const SecureAudioRecorder: React.FC<SecureAudioRecorderProps> = ({
             <p className="text-[10px] text-teal-400">Mã hóa AES-256 tức thì</p>
           </div>
         </div>
+        <button
+          onClick={handleOpenAudioPicker}
+          className="text-xs px-2.5 py-1 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-teal-300 border border-zinc-700"
+          title="Chọn tệp âm thanh hoặc ghi âm qua hệ thống"
+        >
+          + Nạp âm thanh
+        </button>
       </div>
 
       {toast && (
@@ -290,9 +341,19 @@ export const SecureAudioRecorder: React.FC<SecureAudioRecorderProps> = ({
           </button>
         )}
 
-        <span className="text-xs text-zinc-400 mt-4 font-medium">
-          {isRecording ? 'Đang ghi âm bí mật... Bấm để lưu' : 'Bấm micro để bắt đầu ghi âm'}
-        </span>
+        <div className="flex items-center gap-3 mt-4">
+          <span className="text-xs text-zinc-400 font-medium">
+            {isRecording ? 'Đang ghi âm bí mật... Bấm để lưu' : 'Bấm micro để bắt đầu ghi âm'}
+          </span>
+          {!isRecording && (
+            <button
+              onClick={handleOpenAudioPicker}
+              className="text-xs text-teal-400 hover:underline font-semibold"
+            >
+              (hoặc nạp tệp âm thanh)
+            </button>
+          )}
+        </div>
       </div>
 
       {/* Recordings list */}
