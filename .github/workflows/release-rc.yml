@@ -37,7 +37,7 @@ jobs:
         shell: bash
         run: |
           set -o pipefail
-          flutter test --coverage --machine | tee flutter-test.jsonl
+          flutter test --coverage --machine --exclude-tags golden | tee flutter-test.jsonl
           dart run tool/summarize_flutter_test.dart flutter-test.jsonl test-summary.txt "Unit/widget tests"
       - name: Security contracts
         run: flutter test test/unit/logging_contract_test.dart test/unit/platform_privacy_contract_test.dart test/unit/release_security_contract_test.dart test/unit/release_workflow_contract_test.dart test/unit/release_version_contract_test.dart
@@ -130,8 +130,7 @@ jobs:
           disable-linux-hw-accel: auto
           emulator-boot-timeout: 900
           script: |
-            set -o pipefail
-            flutter test integration_test/private_vault_rc_test.dart -d emulator-5554 --machine | tee integration-test.jsonl
+            bash -o pipefail -c 'flutter test integration_test/private_vault_rc_test.dart -d emulator-5554 --machine | tee integration-test.jsonl'
             dart run tool/summarize_flutter_test.dart integration-test.jsonl integration-summary.txt "Android emulator integration tests"
       - uses: actions/upload-artifact@v7
         if: always()

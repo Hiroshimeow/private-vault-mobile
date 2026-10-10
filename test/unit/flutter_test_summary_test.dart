@@ -5,6 +5,7 @@ import '../../tool/summarize_flutter_test.dart';
 void main() {
   test('summarizes testDone events and ignores protocol array events', () {
     final summary = summarizeFlutterMachineLines([
+      '00:00 +0: loading test/unit/sample_test.dart',
       '{"type":"start"}',
       '[{"event":"test.startedProcess","params":{"vmServiceUri":"http://x"}}]',
       '{"type":"testDone","hidden":true,"result":"success","skipped":false}',

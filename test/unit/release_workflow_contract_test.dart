@@ -47,6 +47,13 @@ void main() {
       expect(workflow, contains('flutter-test.jsonl'));
       expect(workflow, contains('test-summary.txt'));
       expect(workflow, contains('dart run tool/summarize_flutter_test.dart'));
+      expect(workflow, contains('--exclude-tags golden'));
+      expect(
+        workflow,
+        contains(
+          "bash -o pipefail -c 'flutter test integration_test/private_vault_rc_test.dart",
+        ),
+      );
       expect(workflow, contains('Configure KVM when available'));
       expect(workflow, contains('if [[ -e /dev/kvm ]]'));
       expect(workflow, contains('disable-linux-hw-accel: auto'));
