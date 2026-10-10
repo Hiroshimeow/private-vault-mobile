@@ -1,0 +1,24 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <queries>
+        <intent>
+            <action android:name="android.intent.action.MAIN" />
+            <category android:name="android.intent.category.LAUNCHER" />
+        </intent>
+    </queries>
+
+    <application
+        android:label="Private Vault Clone Host"
+        android:allowBackup="false"
+        android:usesCleartextTraffic="false">
+        <provider
+            android:name=".CloneHostProvider"
+            android:authorities="${applicationId}.control"
+            android:exported="true"
+            android:permission="io.hiroshimeow.private_vault.permission.CLONE_CONTROL" />
+        <activity
+            android:name=".GuestContainerActivity"
+            android:exported="true"
+            android:permission="io.hiroshimeow.private_vault.permission.CLONE_CONTROL"
+            android:excludeFromRecents="true" />
+    </application>
+</manifest>

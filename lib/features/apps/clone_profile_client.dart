@@ -2,38 +2,54 @@ import 'package:flutter/services.dart';
 
 enum CloneProfileCapabilityState {
   ready,
-  privilegeRequired,
-  cloneProfileUnsupportedByOem,
-  conflictingExternalCloneProfile,
+  runnerMissing,
+  engineUnsupported,
+  unsupportedAbi,
   operationFailed,
 }
 
 class CloneProfileCapability {
   const CloneProfileCapability({
     required this.state,
-    this.userId,
+    required this.slotsAvailable,
+    required this.slotsTotal,
     this.message,
   });
 
   final CloneProfileCapabilityState state;
-  final int? userId;
+  final int slotsAvailable;
+  final int slotsTotal;
   final String? message;
 
   bool get ready => state == CloneProfileCapabilityState.ready;
+}
+
+class CloneInstance {
+  const CloneInstance({
+    required this.instanceId,
+    required this.slot,
+    required this.state,
+  });
+
+  final String instanceId;
+  final int slot;
+  final String state;
 }
 
 class CloneProfileApp {
   const CloneProfileApp({
     required this.packageName,
     required this.label,
-    required this.cloned,
+    required this.instances,
     this.iconBytes,
   });
 
   final String packageName;
   final String label;
-  final bool cloned;
+  final List<CloneInstance> instances;
   final Uint8List? iconBytes;
+
+  bool get canClone => instances.length < 2;
 }
 
 class CloneProfileAppList {
@@ -47,19 +63,27 @@ class CloneProfileOperationResult {
   const CloneProfileOperationResult({
     required this.capability,
     required this.ok,
+    this.instanceId,
+    this.slot,
+    this.errorCode,
+    this.message,
   });
 
   final CloneProfileCapability capability;
   final bool ok;
+  final String? instanceId;
+  final int? slot;
+  final String? errorCode;
+  final String? message;
 }
 
 abstract interface class CloneProfileClient {
   Future<CloneProfileCapability> getCapability();
-  Future<bool> requestPrivilege();
   Future<CloneProfileAppList> listApps();
   Future<CloneProfileOperationResult> clone(String packageName);
-  Future<CloneProfileOperationResult> launch(String packageName);
-  Future<CloneProfileOperationResult> uninstall(String packageName);
+  Future<CloneProfileOperationResult> launch(String instanceId);
+  Future<CloneProfileOperationResult> stop(String instanceId);
+  Future<CloneProfileOperationResult> uninstall(String instanceId);
 }
 
 class PlatformCloneProfileClient implements CloneProfileClient {
@@ -75,10 +99,6 @@ class PlatformCloneProfileClient implements CloneProfileClient {
   );
 
   @override
-  Future<bool> requestPrivilege() async =>
-      await channel.invokeMethod<bool>('requestPrivilege') ?? false;
-
-  @override
   Future<CloneProfileAppList> listApps() async {
     final value = await channel.invokeMapMethod<String, Object?>('listApps');
     final capability = _capability(value);
@@ -87,60 +107,73 @@ class PlatformCloneProfileClient implements CloneProfileClient {
     }
     final rawApps = value?['apps'];
     final apps = rawApps is List
-        ? rawApps
-              .map((value) {
-                final map = Map<Object?, Object?>.from(value! as Map);
-                return CloneProfileApp(
-                  packageName: map['packageName']! as String,
-                  label: map['label']! as String,
-                  cloned: map['cloned'] == true,
-                  iconBytes: map['iconBytes'] as Uint8List?,
-                );
-              })
-              .toList(growable: false)
+        ? rawApps.map((raw) {
+            final map = Map<Object?, Object?>.from(raw! as Map);
+            final rawInstances = map['instances'];
+            final instances = rawInstances is List
+                ? rawInstances.map((rawInstance) {
+                    final instance = Map<Object?, Object?>.from(rawInstance! as Map);
+                    return CloneInstance(
+                      instanceId: instance['instanceId']! as String,
+                      slot: (instance['slot']! as num).toInt(),
+                      state: (instance['state'] as String?) ?? 'unknown',
+                    );
+                  }).toList(growable: false)
+                : const <CloneInstance>[];
+            return CloneProfileApp(
+              packageName: map['packageName']! as String,
+              label: map['label']! as String,
+              instances: instances,
+              iconBytes: map['iconBytes'] as Uint8List?,
+            );
+          }).toList(growable: false)
         : const <CloneProfileApp>[];
     return CloneProfileAppList(capability: capability, apps: apps);
   }
 
   @override
   Future<CloneProfileOperationResult> clone(String packageName) =>
-      _operation('clone', packageName);
+      _operation('clone', <String, Object?>{'packageName': packageName});
 
   @override
-  Future<CloneProfileOperationResult> launch(String packageName) =>
-      _operation('launch', packageName);
+  Future<CloneProfileOperationResult> launch(String instanceId) =>
+      _operation('launch', <String, Object?>{'instanceId': instanceId});
 
   @override
-  Future<CloneProfileOperationResult> uninstall(String packageName) =>
-      _operation('uninstall', packageName);
+  Future<CloneProfileOperationResult> stop(String instanceId) =>
+      _operation('stop', <String, Object?>{'instanceId': instanceId});
+
+  @override
+  Future<CloneProfileOperationResult> uninstall(String instanceId) =>
+      _operation('uninstall', <String, Object?>{'instanceId': instanceId});
 
   Future<CloneProfileOperationResult> _operation(
     String method,
-    String packageName,
+    Map<String, Object?> arguments,
   ) async {
-    final value = await channel.invokeMapMethod<String, Object?>(method, {
-      'packageName': packageName,
-    });
+    final value = await channel.invokeMapMethod<String, Object?>(method, arguments);
     return CloneProfileOperationResult(
       capability: _capability(value),
       ok: value?['ok'] == true,
+      instanceId: value?['instanceId'] as String?,
+      slot: (value?['slot'] as num?)?.toInt(),
+      errorCode: value?['errorCode'] as String?,
+      message: value?['message'] as String?,
     );
   }
 
   CloneProfileCapability _capability(Map<String, Object?>? value) {
-    final raw = value?['state'];
-    final state = switch (raw) {
+    final state = switch (value?['state']) {
       'ready' => CloneProfileCapabilityState.ready,
-      'privilege_required' => CloneProfileCapabilityState.privilegeRequired,
-      'clone_profile_unsupported_by_oem' =>
-        CloneProfileCapabilityState.cloneProfileUnsupportedByOem,
-      'conflicting_external_clone_profile' =>
-        CloneProfileCapabilityState.conflictingExternalCloneProfile,
+      'runner_missing' => CloneProfileCapabilityState.runnerMissing,
+      'engine_unsupported' => CloneProfileCapabilityState.engineUnsupported,
+      'unsupported_abi' => CloneProfileCapabilityState.unsupportedAbi,
       _ => CloneProfileCapabilityState.operationFailed,
     };
     return CloneProfileCapability(
       state: state,
-      userId: (value?['userId'] as num?)?.toInt(),
+      slotsAvailable: (value?['slotsAvailable'] as num?)?.toInt() ?? 0,
+      slotsTotal: (value?['slotsTotal'] as num?)?.toInt() ?? 2,
       message: value?['message'] as String?,
     );
   }
@@ -150,29 +183,31 @@ class UnavailableCloneProfileClient implements CloneProfileClient {
   const UnavailableCloneProfileClient();
 
   CloneProfileCapability get _unsupported => const CloneProfileCapability(
-    state: CloneProfileCapabilityState.cloneProfileUnsupportedByOem,
-    message: 'Real Android clone profiles are unavailable on this platform.',
+    state: CloneProfileCapabilityState.engineUnsupported,
+    slotsAvailable: 0,
+    slotsTotal: 2,
+    message: 'Virtual clone runners are unavailable on this platform.',
   );
+
+  CloneProfileOperationResult get _failed =>
+      CloneProfileOperationResult(capability: _unsupported, ok: false);
 
   @override
   Future<CloneProfileCapability> getCapability() async => _unsupported;
-
-  @override
-  Future<bool> requestPrivilege() async => false;
 
   @override
   Future<CloneProfileAppList> listApps() async =>
       CloneProfileAppList(capability: _unsupported, apps: const []);
 
   @override
-  Future<CloneProfileOperationResult> clone(String packageName) async =>
-      CloneProfileOperationResult(capability: _unsupported, ok: false);
+  Future<CloneProfileOperationResult> clone(String packageName) async => _failed;
 
   @override
-  Future<CloneProfileOperationResult> launch(String packageName) async =>
-      CloneProfileOperationResult(capability: _unsupported, ok: false);
+  Future<CloneProfileOperationResult> launch(String instanceId) async => _failed;
 
   @override
-  Future<CloneProfileOperationResult> uninstall(String packageName) async =>
-      CloneProfileOperationResult(capability: _unsupported, ok: false);
+  Future<CloneProfileOperationResult> stop(String instanceId) async => _failed;
+
+  @override
+  Future<CloneProfileOperationResult> uninstall(String instanceId) async => _failed;
 }

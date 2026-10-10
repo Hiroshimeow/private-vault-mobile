@@ -20,7 +20,7 @@ class MainActivity : FlutterFragmentActivity() {
     private val channelName = "private_vault/platform"
     private var workProfileApiAdapter: WorkProfileHostApiAdapter? = null
     private var portableVaultTreeBridge: PortableVaultTreeBridge? = null
-    private var cloneProfileBridge: CloneProfileBridge? = null
+    private var cloneProfileBridge: VirtualCloneBridge? = null
     private val documentStreams = mutableMapOf<String, InputStream>()
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -40,7 +40,7 @@ class MainActivity : FlutterFragmentActivity() {
             this,
             flutterEngine.dartExecutor.binaryMessenger,
         )
-        cloneProfileBridge = CloneProfileBridge(
+        cloneProfileBridge = VirtualCloneBridge(
             this,
             flutterEngine.dartExecutor.binaryMessenger,
         )

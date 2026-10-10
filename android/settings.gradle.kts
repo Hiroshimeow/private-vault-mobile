@@ -24,3 +24,5 @@ plugins {
 }
 
 include(":app")
+include(":clonehost")
+include(":clonefixture")
