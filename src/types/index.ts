@@ -1,6 +1,6 @@
-export type CoverPreference = 'calculator' | 'notes';
+export type CoverPreference = 'calculator' | 'notes' | 'calendar' | 'weather' | 'clock';
 
-export type VaultItemKind = 'note' | 'image' | 'video' | 'document' | 'unknown';
+export type VaultItemKind = 'note' | 'image' | 'video' | 'audio' | 'document' | 'unknown';
 
 export interface VaultItem {
   id: string;
@@ -13,7 +13,7 @@ export interface VaultItem {
   thumbnail?: string;
   width?: number;
   height?: number;
-  duration?: string; // For videos e.g. "0:42"
+  duration?: string; // For videos/audio e.g. "0:42"
 }
 
 export interface VaultAlbum {
@@ -26,6 +26,8 @@ export interface VaultAlbum {
 
 export interface AppSettings {
   cover: CoverPreference;
+  appTitle: string;
+  appIconTheme: string;
   panicShakeEnabled: boolean;
   panicFaceDownEnabled: boolean;
   shakeThresholdG: number;
@@ -33,12 +35,17 @@ export interface AppSettings {
   autoLockSeconds: number;
   biometricsEnabled: boolean;
   browserClearOnClose: boolean;
+  browserUserAgent: 'mobile' | 'desktop';
   confirmExport: boolean;
   darkMode: boolean;
+  decoyPinEnabled: boolean;
+  hideNotifications: boolean;
 }
 
 export const DEFAULT_SETTINGS: AppSettings = {
   cover: 'calculator',
+  appTitle: 'Máy tính',
+  appIconTheme: 'calculator',
   panicShakeEnabled: true,
   panicFaceDownEnabled: false,
   shakeThresholdG: 2.5,
@@ -46,8 +53,11 @@ export const DEFAULT_SETTINGS: AppSettings = {
   autoLockSeconds: 0,
   biometricsEnabled: false,
   browserClearOnClose: true,
+  browserUserAgent: 'mobile',
   confirmExport: true,
-  darkMode: false,
+  darkMode: true,
+  decoyPinEnabled: false,
+  hideNotifications: true,
 };
 
 export interface BrowserProfile {
@@ -61,7 +71,7 @@ export interface CloneApp {
   id: string;
   name: string;
   packageName: string;
-  category: 'system' | 'social' | 'messaging' | 'finance' | 'tools' | 'custom';
+  category: 'system' | 'social' | 'messaging' | 'dating' | 'finance' | 'tools' | 'custom';
   status: 'uncloned' | 'cloned' | 'paused';
   iconColor: string;
   iconType?: string;
