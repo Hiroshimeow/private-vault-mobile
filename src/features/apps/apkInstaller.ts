@@ -1,5 +1,12 @@
 import { CloneApp } from '../../types';
 
+export class InvalidApkException extends Error {
+  constructor(message = 'Tệp tin không phải là APK Android hợp lệ.') {
+    super(message);
+    this.name = 'InvalidApkException';
+  }
+}
+
 export interface ApkMetadata {
   fileName: string;
   fileSizeBytes: number;
@@ -7,73 +14,94 @@ export interface ApkMetadata {
   packageName: string;
   versionName: string;
   sha256: string;
-  permissions: string[];
+  hasManifest: boolean;
+  hasDex: boolean;
   iconColor: string;
 }
 
-// Pure TypeScript APK (ZIP format) parser without heavy external libraries
 export class ApkParser {
+  /**
+   * Genuine binary APK archive parser.
+   * Validates ZIP magic bytes and checks for AndroidManifest.xml and classes.dex.
+   * Fails closed on invalid files (fixing A09 finding).
+   */
   static async parseApkFile(file: File): Promise<ApkMetadata> {
     const buffer = await file.arrayBuffer();
+    const bytes = new Uint8Array(buffer);
+
+    // 1. Check ZIP magic number: PK\x03\x04 (0x50, 0x4B, 0x03, 0x04)
+    if (
+      bytes.length < 30 ||
+      bytes[0] !== 0x50 ||
+      bytes[1] !== 0x4b ||
+      bytes[2] !== 0x03 ||
+      bytes[3] !== 0x04
+    ) {
+      throw new InvalidApkException('Tệp tin không có định dạng nén ZIP/APK hợp lệ.');
+    }
+
+    // 2. Scan ZIP entries for AndroidManifest.xml and classes.dex
+    let hasManifest = false;
+    let hasDex = false;
+    let offset = 0;
+    const decoder = new TextDecoder('utf-8');
+
+    while (offset + 30 <= bytes.length) {
+      // Check for local file header signature 0x04034b50
+      if (
+        bytes[offset] !== 0x50 ||
+        bytes[offset + 1] !== 0x4b ||
+        bytes[offset + 2] !== 0x03 ||
+        bytes[offset + 3] !== 0x04
+      ) {
+        break;
+      }
+
+      const compressedSize =
+        bytes[offset + 18] |
+        (bytes[offset + 19] << 8) |
+        (bytes[offset + 20] << 16) |
+        (bytes[offset + 21] << 24);
+      const fileNameLength = bytes[offset + 26] | (bytes[offset + 27] << 8);
+      const extraFieldLength = bytes[offset + 28] | (bytes[offset + 29] << 8);
+
+      const fileNameStart = offset + 30;
+      if (fileNameStart + fileNameLength <= bytes.length) {
+        const fileNameBytes = bytes.subarray(fileNameStart, fileNameStart + fileNameLength);
+        const fileName = decoder.decode(fileNameBytes);
+
+        if (fileName === 'AndroidManifest.xml') {
+          hasManifest = true;
+        } else if (fileName === 'classes.dex') {
+          hasDex = true;
+        }
+      }
+
+      // Move to next entry
+      offset += 30 + fileNameLength + extraFieldLength + compressedSize;
+    }
+
+    if (!hasManifest) {
+      throw new InvalidApkException('Tệp APK không chứa tệp kê khai AndroidManifest.xml.');
+    }
+
+    // 3. Compute real SHA-256
     const sha256 = await this.calculateSha256(buffer);
 
-    // Default heuristics based on filename if manifest is binary encoded
+    // Clean display name from file
     const cleanName = file.name.replace(/\.apk$/i, '');
-    let detectedPackage = 'com.unknown.app';
-    let detectedName = cleanName;
-
-    // Check if filename contains common package patterns
-    if (cleanName.includes('.')) {
-      const parts = cleanName.split('.');
-      if (parts.length >= 3 && (parts[0] === 'com' || parts[0] === 'org' || parts[0] === 'vn' || parts[0] === 'io')) {
-        detectedPackage = cleanName;
-        detectedName = parts[parts.length - 1];
-      }
-    }
-
-    // Common app detections
-    const lower = cleanName.toLowerCase();
-    let iconColor = '#00a389';
-    let permissions = ['android.permission.INTERNET', 'android.permission.ACCESS_NETWORK_STATE'];
-
-    if (lower.includes('zalo')) {
-      detectedName = 'Zalo (APK)';
-      detectedPackage = 'com.zing.zalo';
-      iconColor = '#0068ff';
-      permissions.push('android.permission.CAMERA', 'android.permission.RECORD_AUDIO');
-    } else if (lower.includes('telegram')) {
-      detectedName = 'Telegram (APK)';
-      detectedPackage = 'org.telegram.messenger';
-      iconColor = '#24A1DE';
-      permissions.push('android.permission.READ_EXTERNAL_STORAGE');
-    } else if (lower.includes('whatsapp')) {
-      detectedName = 'WhatsApp (APK)';
-      detectedPackage = 'com.whatsapp';
-      iconColor = '#25D366';
-    } else if (lower.includes('facebook')) {
-      detectedName = 'Facebook (APK)';
-      detectedPackage = 'com.facebook.katana';
-      iconColor = '#1877F2';
-    } else if (lower.includes('signal')) {
-      detectedName = 'Signal (APK)';
-      detectedPackage = 'org.thoughtcrime.securesms';
-      iconColor = '#3b82f6';
-    } else if (lower.includes('bank') || lower.includes('vcb') || lower.includes('mb')) {
-      detectedName = 'Banking Secure (APK)';
-      detectedPackage = 'com.secure.bank';
-      iconColor = '#005a3c';
-      permissions.push('android.permission.USE_BIOMETRIC');
-    }
+    const cleanPackage = `package.${cleanName.toLowerCase().replace(/[^a-z0-9_.]/g, '')}`;
 
     return {
       fileName: file.name,
       fileSizeBytes: file.size,
-      appName: detectedName,
-      packageName: detectedPackage,
-      versionName: '1.0.0 (Release)',
+      appName: cleanName,
+      packageName: cleanPackage,
+      versionName: 'Xác thực qua OS PackageInstaller',
       sha256,
-      permissions,
-      iconColor,
+      hasManifest,
+      hasDex,
+      iconColor: '#00a389',
     };
   }
 
@@ -89,7 +117,7 @@ export class ApkParser {
       name: meta.appName,
       packageName: meta.packageName,
       category: 'custom',
-      status: 'cloned',
+      status: 'uncloned', // Stored in Vault; requires OS PackageInstaller to be cloned
       iconColor: meta.iconColor,
       dataSizeBytes: meta.fileSizeBytes,
       lastLaunchedAt: new Date().toISOString(),

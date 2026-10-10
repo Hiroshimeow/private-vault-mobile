@@ -1,3 +1,10 @@
+export class StorageException extends Error {
+  constructor(message = 'Storage operation failed', options?: ErrorOptions) {
+    super(message, options);
+    this.name = 'StorageException';
+  }
+}
+
 export interface SecretStore {
   read(key: string): Promise<string | null>;
   write(key: string, value: string): Promise<void>;
@@ -9,9 +16,10 @@ export class LocalSecretStore implements SecretStore {
 
   async read(key: string): Promise<string | null> {
     try {
-      return localStorage.getItem(this.prefix + key);
-    } catch {
-      return null;
+      const val = localStorage.getItem(this.prefix + key);
+      return val;
+    } catch (err) {
+      throw new StorageException(`Failed to read from secret store: ${key}`, { cause: err });
     }
   }
 
@@ -19,7 +27,7 @@ export class LocalSecretStore implements SecretStore {
     try {
       localStorage.setItem(this.prefix + key, value);
     } catch (err) {
-      console.error('Failed to write to secret store:', err);
+      throw new StorageException(`Failed to write to secret store: ${key}`, { cause: err });
     }
   }
 
@@ -27,7 +35,7 @@ export class LocalSecretStore implements SecretStore {
     try {
       localStorage.removeItem(this.prefix + key);
     } catch (err) {
-      console.error('Failed to remove from secret store:', err);
+      throw new StorageException(`Failed to remove from secret store: ${key}`, { cause: err });
     }
   }
 }

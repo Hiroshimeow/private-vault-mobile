@@ -8,6 +8,7 @@ import {
   CheckCircle2,
 } from 'lucide-react';
 import { LocalVaultRepository } from '../../vault/vaultRepository';
+import { VaultSessionManager } from '../../vault/vaultSession';
 
 interface SecureCameraAppViewProps {
   onBack: () => void;
@@ -33,10 +34,15 @@ export const SecureCameraAppView: React.FC<SecureCameraAppViewProps> = ({
     setTimeout(() => setToast(null), 3000);
   };
 
-  const startStream = async (mode: 'user' | 'environment') => {
+  const stopStream = () => {
     if (streamRef.current) {
       streamRef.current.getTracks().forEach((t) => t.stop());
+      streamRef.current = null;
     }
+  };
+
+  const startStream = async (mode: 'user' | 'environment') => {
+    stopStream();
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
         video: { facingMode: mode, width: { ideal: 1920 }, height: { ideal: 1080 } },
@@ -63,9 +69,18 @@ export const SecureCameraAppView: React.FC<SecureCameraAppViewProps> = ({
 
   useEffect(() => {
     startStream(facingMode);
+    const unsub = VaultSessionManager.getInstance().subscribe(() => {
+      stopStream();
+      if (lastPhotoUrl) {
+        URL.revokeObjectURL(lastPhotoUrl);
+        setLastPhotoUrl(null);
+      }
+    });
     return () => {
-      if (streamRef.current) {
-        streamRef.current.getTracks().forEach((t) => t.stop());
+      stopStream();
+      unsub();
+      if (lastPhotoUrl) {
+        URL.revokeObjectURL(lastPhotoUrl);
       }
     };
   }, [facingMode]);
@@ -85,109 +100,123 @@ export const SecureCameraAppView: React.FC<SecureCameraAppViewProps> = ({
 
     ctx.drawImage(videoRef.current, 0, 0, canvas.width, canvas.height);
 
-    canvas.toBlob(async (blob) => {
-      setIsCapturing(false);
-      if (!blob) return;
-      const buffer = await blob.arrayBuffer();
-      const bytes = new Uint8Array(buffer);
-      const name = `Camera_${Date.now()}.png`;
+    canvas.toBlob(
+      async (blob) => {
+        if (!blob) {
+          setIsCapturing(false);
+          return;
+        }
 
-      await repository.addBytes(bytes, {
-        kind: 'image',
-        name,
-        album: 'Máy ảnh',
-        isFavorite: false,
-        width: canvas.width,
-        height: canvas.height,
-      });
+        try {
+          const buffer = await blob.arrayBuffer();
+          const bytes = new Uint8Array(buffer);
+          const name = `IMG_${new Date().toISOString().replace(/[:.]/g, '-')}.jpg`;
 
-      const url = URL.createObjectURL(blob);
-      setLastPhotoUrl(url);
-      showToast('Đã lưu và mã hóa ảnh trực tiếp vào Thư mục Bảo mật');
-    }, 'image/png');
+          await repository.addBytes(bytes, {
+            kind: 'image',
+            name,
+            mimeType: 'image/jpeg',
+            album: 'Máy ảnh',
+            width: canvas.width,
+            height: canvas.height,
+          });
+
+          if (lastPhotoUrl) URL.revokeObjectURL(lastPhotoUrl);
+          const newUrl = URL.createObjectURL(blob);
+          setLastPhotoUrl(newUrl);
+
+          showToast('Đã lưu & mã hóa vào Thư mục Bảo mật');
+        } catch {
+          showToast('Lỗi khi mã hóa ảnh chụp');
+        } finally {
+          setIsCapturing(false);
+        }
+      },
+      'image/jpeg',
+      0.95
+    );
   };
 
-  const handleFlip = () => {
+  const toggleCamera = () => {
     setFacingMode((prev) => (prev === 'environment' ? 'user' : 'environment'));
   };
 
   return (
-    <div className="flex flex-col h-full bg-black text-white select-none overflow-hidden relative font-sans">
-      {/* Camera Top Bar */}
-      <div className="p-4 flex items-center justify-between z-20 bg-gradient-to-b from-black/80 to-transparent">
+    <div className="flex flex-col h-full bg-black text-white select-none overflow-hidden font-sans relative">
+      {/* Viewfinder Header */}
+      <div className="absolute top-0 inset-x-0 z-20 flex items-center justify-between p-4 bg-gradient-to-b from-black/80 to-transparent">
         <button
-          onClick={onBack}
-          className="p-2 rounded-full bg-black/40 hover:bg-black/70 backdrop-blur-xs transition-colors"
+          onClick={() => {
+            stopStream();
+            onBack();
+          }}
+          className="p-2 rounded-full bg-black/40 backdrop-blur-md hover:bg-black/60 transition-colors"
         >
-          <ChevronLeft className="w-5 h-5" />
+          <ChevronLeft className="w-6 h-6" />
         </button>
 
-        <div className="text-center">
-          <span className="text-xs font-bold uppercase tracking-wider text-teal-400">
-            Máy ảnh bảo mật
-          </span>
-          <p className="text-[10px] text-zinc-400 font-mono">Lưu trữ không để lại dấu vết</p>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => setFlashEnabled(!flashEnabled)}
+            className="p-2 rounded-full bg-black/40 backdrop-blur-md hover:bg-black/60 transition-colors text-amber-300"
+          >
+            {flashEnabled ? <Zap className="w-5 h-5 fill-current" /> : <ZapOff className="w-5 h-5" />}
+          </button>
         </div>
-
-        <button
-          onClick={() => setFlashEnabled(!flashEnabled)}
-          className={`p-2 rounded-full transition-colors ${
-            flashEnabled ? 'bg-amber-500 text-black' : 'bg-black/40 text-white'
-          }`}
-        >
-          {flashEnabled ? <Zap className="w-4 h-4" /> : <ZapOff className="w-4 h-4" />}
-        </button>
       </div>
 
-      {/* Viewfinder */}
-      <div className="flex-1 relative overflow-hidden flex items-center justify-center">
-        <video ref={videoRef} playsInline autoPlay className="w-full h-full object-cover" />
+      {toast && (
+        <div className="absolute top-16 left-1/2 -translate-x-1/2 z-30 px-4 py-2 bg-teal-950/90 border border-teal-500/50 rounded-xl text-xs text-teal-300 shadow-xl flex items-center gap-2">
+          <CheckCircle2 className="w-4 h-4" />
+          <span>{toast}</span>
+        </div>
+      )}
 
+      {/* Video Viewfinder */}
+      <div className="flex-1 relative bg-black flex items-center justify-center overflow-hidden">
+        <video
+          ref={videoRef}
+          playsInline
+          autoPlay
+          muted
+          className="w-full h-full object-cover"
+        />
         {isCapturing && (
-          <div className="absolute inset-0 bg-white opacity-80 animate-out fade-out duration-300 pointer-events-none" />
+          <div className="absolute inset-0 bg-white animate-in fade-in duration-100 opacity-80 pointer-events-none" />
         )}
       </div>
 
       {/* Bottom Shutter Controls */}
-      <div className="p-6 bg-gradient-to-t from-black via-black/90 to-transparent flex items-center justify-around z-20">
-        {/* Gallery shortcut thumbnail */}
+      <div className="h-28 bg-black/90 backdrop-blur-md flex items-center justify-around px-8 shrink-0 z-20">
         <button
-          onClick={onOpenGallery || onBack}
-          className="w-12 h-12 rounded-xl bg-zinc-900 border border-zinc-700 overflow-hidden flex items-center justify-center shadow-md active:scale-95 transition-all"
-          title="Xem Bộ sưu tập"
+          onClick={() => {
+            stopStream();
+            onOpenGallery?.();
+          }}
+          className="w-12 h-12 rounded-xl bg-zinc-800 border border-zinc-700 flex items-center justify-center overflow-hidden"
         >
           {lastPhotoUrl ? (
             <img src={lastPhotoUrl} alt="Thumbnail" className="w-full h-full object-cover" />
           ) : (
-            <ImageIcon className="w-5 h-5 text-teal-400" />
+            <ImageIcon className="w-5 h-5 text-zinc-400" />
           )}
         </button>
 
-        {/* Shutter Button */}
         <button
           onClick={handleCapture}
           disabled={isCapturing}
-          className="w-18 h-18 rounded-full border-4 border-white flex items-center justify-center hover:bg-white/20 active:scale-90 transition-all"
+          className="w-18 h-18 rounded-full border-4 border-white flex items-center justify-center p-1 active:scale-95 transition-transform"
         >
-          <div className="w-14 h-14 rounded-full bg-white shadow-xl" />
+          <div className="w-full h-full rounded-full bg-white hover:bg-zinc-200 transition-colors" />
         </button>
 
-        {/* Flip camera */}
         <button
-          onClick={handleFlip}
-          className="w-12 h-12 rounded-full bg-zinc-800/80 hover:bg-zinc-700 flex items-center justify-center text-white active:scale-95 transition-all"
-          title="Đổi camera trước/sau"
+          onClick={toggleCamera}
+          className="w-12 h-12 rounded-full bg-zinc-800 border border-zinc-700 flex items-center justify-center text-zinc-300 hover:text-white"
         >
           <RotateCw className="w-5 h-5" />
         </button>
       </div>
-
-      {toast && (
-        <div className="absolute bottom-24 left-1/2 -translate-x-1/2 z-30 px-3.5 py-1.5 rounded-xl bg-teal-500 text-zinc-950 font-bold text-xs flex items-center gap-1.5 shadow-2xl animate-in fade-in">
-          <CheckCircle2 className="w-4 h-4 shrink-0" />
-          <span>{toast}</span>
-        </div>
-      )}
     </div>
   );
 };

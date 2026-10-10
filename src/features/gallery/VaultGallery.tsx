@@ -16,16 +16,15 @@ import {
   Search,
   CheckSquare,
   Square,
-  Sparkles,
   Play,
   Folder,
   Download,
 } from 'lucide-react';
 import { LocalVaultRepository } from '../vault/vaultRepository';
 import { VaultItem } from '../../types';
-import { seedSampleVaultMedia } from './sampleMedia';
 import { VaultThumbnail } from './VaultThumbnail';
 import { thumbnailCache } from './thumbnailCache';
+import { VaultSessionManager } from '../vault/vaultSession';
 
 interface VaultGalleryProps {
   repository: LocalVaultRepository;
@@ -35,9 +34,11 @@ interface VaultGalleryProps {
 
 export const VaultGallery: React.FC<VaultGalleryProps> = ({
   repository,
+  confirmExport = true,
 }) => {
   const [items, setItems] = useState<VaultItem[]>([]);
   const [loading, setLoading] = useState(true);
+  const [importMode, setImportMode] = useState<'copy' | 'move'>('copy');
   const [activeTab, setActiveTab] = useState<'pictures' | 'albums' | 'videos' | 'favorites'>('pictures');
   const [selectedAlbum, setSelectedAlbum] = useState<string | null>(null);
 
@@ -104,14 +105,18 @@ export const VaultGallery: React.FC<VaultGalleryProps> = ({
     loadMedia();
   }, [repository]);
 
-  // If items empty on first load, seed with high quality sample media automatically
+  // Clean up lightbox and camera resources when vault session is revoked (lock/panic)
   useEffect(() => {
-    if (!loading && items.length === 0) {
-      seedSampleVaultMedia(repository).then(() => {
-        loadMedia();
-      });
-    }
-  }, [loading, items.length, repository]);
+    const unsub = VaultSessionManager.getInstance().subscribe(() => {
+      stopCamera();
+      if (viewingDecryptedUrl) {
+        URL.revokeObjectURL(viewingDecryptedUrl);
+        setViewingDecryptedUrl(null);
+      }
+      setViewingIndex(null);
+    });
+    return unsub;
+  }, [viewingDecryptedUrl]);
 
   // Decrypt media for lightbox viewing
   useEffect(() => {
@@ -126,16 +131,29 @@ export const VaultGallery: React.FC<VaultGalleryProps> = ({
 
     const currentItem = filteredItems[viewingIndex];
     let isMounted = true;
+    let localUrl: string | null = null;
 
     repository
       .readBytes(currentItem.id)
       .then((data) => {
         if (!isMounted) return;
-        const mime = data.kind === 'video' ? 'video/mp4' : data.name.endsWith('.svg') ? 'image/svg+xml' : 'image/png';
+        const ext = data.name.split('.').pop()?.toLowerCase();
+        const mimeMap: Record<string, string> = {
+          jpg: 'image/jpeg',
+          jpeg: 'image/jpeg',
+          png: 'image/png',
+          webp: 'image/webp',
+          svg: 'image/svg+xml',
+          gif: 'image/gif',
+          mp4: 'video/mp4',
+          webm: 'video/webm',
+          mov: 'video/quicktime',
+        };
+        const mime = data.mimeType || (ext ? mimeMap[ext] : null) || (data.kind === 'video' ? 'video/mp4' : 'image/jpeg');
         const blob = new Blob([data.bytes], { type: mime });
-        const url = URL.createObjectURL(blob);
+        localUrl = URL.createObjectURL(blob);
         if (viewingDecryptedUrl) URL.revokeObjectURL(viewingDecryptedUrl);
-        setViewingDecryptedUrl(url);
+        setViewingDecryptedUrl(localUrl);
       })
       .catch((err) => {
         console.error('Decryption failed for preview:', err);
@@ -144,6 +162,9 @@ export const VaultGallery: React.FC<VaultGalleryProps> = ({
 
     return () => {
       isMounted = false;
+      if (localUrl) {
+        URL.revokeObjectURL(localUrl);
+      }
     };
   }, [viewingIndex]);
 
@@ -175,7 +196,7 @@ export const VaultGallery: React.FC<VaultGalleryProps> = ({
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [viewingIndex]);
 
-  // Multi-file batch import
+  // Multi-file batch import (Copy default vs Safe Move)
   const handleImportFiles = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const fileList = e.target.files;
     if (!fileList || fileList.length === 0) return;
@@ -193,16 +214,56 @@ export const VaultGallery: React.FC<VaultGalleryProps> = ({
         const bytes = new Uint8Array(buffer);
         const isVid = /\.(mp4|webm|mov|mkv)$/i.test(file.name);
 
-        await repository.addBytes(bytes, {
+        // Compute SHA-256 for source integrity
+        const hashBuf = await crypto.subtle.digest('SHA-256', buffer);
+        const sourceHash = Array.from(new Uint8Array(hashBuf))
+          .map((b) => b.toString(16).padStart(2, '0'))
+          .join('');
+
+        const ext = file.name.split('.').pop()?.toLowerCase();
+        const mimeMap: Record<string, string> = {
+          jpg: 'image/jpeg',
+          jpeg: 'image/jpeg',
+          png: 'image/png',
+          webp: 'image/webp',
+          svg: 'image/svg+xml',
+          gif: 'image/gif',
+          mp4: 'video/mp4',
+          webm: 'video/webm',
+          mov: 'video/quicktime',
+          mkv: 'video/x-matroska',
+        };
+        const mimeType = (ext && mimeMap[ext]) || file.type || (isVid ? 'video/mp4' : 'image/jpeg');
+
+        const saved = await repository.addBytes(bytes, {
           kind: isVid ? 'video' : 'image',
           name: file.name,
+          mimeType,
+          sourceHash,
           album: targetAlbum,
           isFavorite: false,
         });
+
+        // Safe Move: destination readback & verification before requesting source deletion
+        if (importMode === 'move') {
+          const verified = await repository.readBytes(saved.id);
+          const verifyBuf = await crypto.subtle.digest('SHA-256', verified.bytes as ArrayBufferView);
+          const verifyHash = Array.from(new Uint8Array(verifyBuf))
+            .map((b) => b.toString(16).padStart(2, '0'))
+            .join('');
+          if (verifyHash !== sourceHash) {
+            throw new Error(`Xác minh dữ liệu đích không khớp cho ${file.name}`);
+          }
+        }
+
         successCount++;
       }
 
-      showToast(`Đã mã hóa và lưu ${successCount} tệp vào album "${targetAlbum}"`);
+      if (importMode === 'move') {
+        showToast(`Đã mã hóa và xác minh ${successCount} tệp. Chế độ Di chuyển: Tệp gốc được giữ an toàn trên thiết bị (yêu cầu quyền Android SAF để tự động xóa).`);
+      } else {
+        showToast(`Đã sao chép và mã hóa ${successCount} tệp vào album "${targetAlbum}"`);
+      }
       await loadMedia();
     } catch (err) {
       console.error(err);
@@ -340,18 +401,44 @@ export const VaultGallery: React.FC<VaultGalleryProps> = ({
 
   // Export / Download
   const handleExportItem = async (item: VaultItem) => {
+    if (confirmExport) {
+      const ok = window.confirm(
+        `Bạn có chắc chắn muốn xuất tệp "${item.name || 'này'}" ra bộ nhớ công khai không? Tệp xuất ra sẽ không còn được mã hóa.`
+      );
+      if (!ok) return;
+    }
+
     try {
       const data = await repository.readBytes(item.id);
-      const mime = item.kind === 'video' ? 'video/mp4' : 'image/png';
+      const ext = (item.name || '').split('.').pop()?.toLowerCase();
+      const mimeMap: Record<string, string> = {
+        jpg: 'image/jpeg',
+        jpeg: 'image/jpeg',
+        png: 'image/png',
+        webp: 'image/webp',
+        svg: 'image/svg+xml',
+        gif: 'image/gif',
+        mp4: 'video/mp4',
+        webm: 'video/webm',
+        mov: 'video/quicktime',
+        mkv: 'video/x-matroska',
+        pdf: 'application/pdf',
+        txt: 'text/plain',
+      };
+      const mime =
+        data.mimeType ||
+        (ext ? mimeMap[ext] : null) ||
+        (item.kind === 'video' ? 'video/mp4' : 'image/jpeg');
+
       const blob = new Blob([data.bytes], { type: mime });
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = data.name || `vault-media-${item.id.slice(0, 6)}.png`;
+      a.download = data.name || `vault-media-${item.id.slice(0, 6)}.${ext || 'bin'}`;
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
-      URL.revokeObjectURL(url);
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
       showToast('Đã xuất bản sao giải mã về thiết bị');
     } catch {
       showToast('Lỗi khi xuất tệp');
@@ -657,8 +744,12 @@ export const VaultGallery: React.FC<VaultGalleryProps> = ({
 
       {/* Main Content Area */}
       <div className="flex-1 overflow-y-auto p-3 space-y-4">
-        {/* Album Mode: If tab is 'albums' and no album is selected, show Album Grid */}
-        {activeTab === 'albums' && !selectedAlbum ? (
+        {loading ? (
+          <div className="flex flex-col items-center justify-center py-24 space-y-3">
+            <div className="w-6 h-6 border-2 border-teal-400 border-t-transparent rounded-full animate-spin" />
+            <span className="text-xs text-zinc-500 font-mono">Đang nạp danh mục Vault...</span>
+          </div>
+        ) : activeTab === 'albums' && !selectedAlbum ? (
           <div className="space-y-3">
             <div className="flex items-center justify-between px-1">
               <span className="text-xs font-semibold uppercase tracking-wider text-zinc-400">
@@ -705,41 +796,49 @@ export const VaultGallery: React.FC<VaultGalleryProps> = ({
             </div>
             <div>
               <p className="text-sm font-semibold text-zinc-300">
-                {selectedAlbum ? `Album "${selectedAlbum}" chưa có mục nào` : 'Không có ảnh hoặc video nào'}
+                {selectedAlbum ? `Album "${selectedAlbum}" chưa có mục nào` : 'Kho chưa có ảnh hoặc video nào'}
               </p>
               <p className="text-xs text-zinc-500 mt-1 max-w-xs">
                 {selectedAlbum
-                  ? `Bấm nút bên dưới để chọn nhiều ảnh và thêm trực tiếp vào album "${selectedAlbum}".`
-                  : 'Nhập ảnh từ máy tính hoặc bấm "Nạp ảnh mẫu" để xem kho ảnh mẫu được mã hóa.'}
+                  ? `Bấm nút bên dưới để chọn ảnh hoặc video thêm vào album "${selectedAlbum}".`
+                  : 'Chọn tệp từ thiết bị để mã hóa trực tiếp bằng AES-256 vào Vault riêng tư.'}
               </p>
             </div>
+            
+            {/* Mode selection: Copy (default) vs Safe Move */}
+            <div className="flex items-center gap-1.5 p-1 rounded-xl bg-zinc-900 border border-zinc-800 text-xs">
+              <button
+                type="button"
+                onClick={() => setImportMode('copy')}
+                className={`px-3 py-1 rounded-lg font-medium transition-colors ${
+                  importMode === 'copy'
+                    ? 'bg-teal-500/20 text-teal-300 font-bold border border-teal-500/40'
+                    : 'text-zinc-400 hover:text-zinc-200'
+                }`}
+              >
+                Sao chép (Copy)
+              </button>
+              <button
+                type="button"
+                onClick={() => setImportMode('move')}
+                className={`px-3 py-1 rounded-lg font-medium transition-colors ${
+                  importMode === 'move'
+                    ? 'bg-amber-500/20 text-amber-300 font-bold border border-amber-500/40'
+                    : 'text-zinc-400 hover:text-zinc-200'
+                }`}
+              >
+                Di chuyển an toàn (Move)
+              </button>
+            </div>
+
             <div className="flex items-center gap-2 pt-2">
-              {selectedAlbum ? (
-                <button
-                  onClick={() => fileInputRef.current?.click()}
-                  className="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-teal-500 text-zinc-950 text-xs font-bold hover:bg-teal-400 transition-colors shadow-md"
-                >
-                  <Plus className="w-4 h-4" />
-                  <span>+ Thêm ảnh vào album này</span>
-                </button>
-              ) : (
-                <>
-                  <button
-                    onClick={() => seedSampleVaultMedia(repository).then(loadMedia)}
-                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-teal-500/20 text-teal-300 border border-teal-500/30 text-xs font-semibold hover:bg-teal-500/30 transition-colors"
-                  >
-                    <Sparkles className="w-3.5 h-3.5" />
-                    <span>Nạp ảnh mẫu chất lượng cao</span>
-                  </button>
-                  <button
-                    onClick={() => fileInputRef.current?.click()}
-                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-zinc-800 text-zinc-200 text-xs font-semibold hover:bg-zinc-700 transition-colors"
-                  >
-                    <Plus className="w-3.5 h-3.5" />
-                    <span>Nhập ảnh</span>
-                  </button>
-                </>
-              )}
+              <button
+                onClick={() => fileInputRef.current?.click()}
+                className="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-teal-500 text-zinc-950 text-xs font-bold hover:bg-teal-400 transition-colors shadow-md"
+              >
+                <Plus className="w-4 h-4" />
+                <span>+ Chọn ảnh & video nhập vào Vault</span>
+              </button>
             </div>
           </div>
         ) : (

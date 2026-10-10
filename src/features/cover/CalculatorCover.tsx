@@ -12,28 +12,47 @@ export const CalculatorCover: React.FC<CalculatorCoverProps> = ({ onUnlockReques
   const [operator, setOperator] = useState<string | null>(null);
   const [replace, setReplace] = useState(true);
 
-  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const [isPressing, setIsPressing] = useState(false);
+  const headerTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const equalsTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [isHeaderPressing, setIsHeaderPressing] = useState(false);
 
-  const startPress = () => {
-    setIsPressing(true);
-    timerRef.current = setTimeout(() => {
-      setIsPressing(false);
+  const startHeaderPress = (e: React.PointerEvent) => {
+    e.preventDefault();
+    setIsHeaderPressing(true);
+    if (headerTimerRef.current) clearTimeout(headerTimerRef.current);
+    headerTimerRef.current = setTimeout(() => {
+      setIsHeaderPressing(false);
       onUnlockRequested();
-    }, 700);
+    }, 750);
   };
 
-  const cancelPress = () => {
-    setIsPressing(false);
-    if (timerRef.current) {
-      clearTimeout(timerRef.current);
-      timerRef.current = null;
+  const cancelHeaderPress = () => {
+    setIsHeaderPressing(false);
+    if (headerTimerRef.current) {
+      clearTimeout(headerTimerRef.current);
+      headerTimerRef.current = null;
+    }
+  };
+
+  const startEqualsPress = (e: React.PointerEvent) => {
+    e.preventDefault();
+    if (equalsTimerRef.current) clearTimeout(equalsTimerRef.current);
+    equalsTimerRef.current = setTimeout(() => {
+      onUnlockRequested();
+    }, 750);
+  };
+
+  const cancelEqualsPress = () => {
+    if (equalsTimerRef.current) {
+      clearTimeout(equalsTimerRef.current);
+      equalsTimerRef.current = null;
     }
   };
 
   useEffect(() => {
     return () => {
-      if (timerRef.current) clearTimeout(timerRef.current);
+      if (headerTimerRef.current) clearTimeout(headerTimerRef.current);
+      if (equalsTimerRef.current) clearTimeout(equalsTimerRef.current);
     };
   }, []);
 
@@ -77,6 +96,11 @@ export const CalculatorCover: React.FC<CalculatorCoverProps> = ({ onUnlockReques
   };
 
   const operation = (op: string) => {
+    if (operator && replace) {
+      // Switch operator without re-calculating
+      setOperator(op);
+      return;
+    }
     const calculated = applyPending(left, operator, display);
     setDisplay(calculated);
     setLeft(parseFloat(calculated));
@@ -131,22 +155,6 @@ export const CalculatorCover: React.FC<CalculatorCoverProps> = ({ onUnlockReques
     }
   };
 
-  // Calculator unlock gate: holding '=' triggers unlock request directly
-  const equalsTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  const startEqualsPress = () => {
-    equalsTimerRef.current = setTimeout(() => {
-      onUnlockRequested();
-    }, 650);
-  };
-
-  const cancelEqualsPress = () => {
-    if (equalsTimerRef.current) {
-      clearTimeout(equalsTimerRef.current);
-      equalsTimerRef.current = null;
-    }
-  };
-
   const keys = [
     '7', '8', '9', '÷',
     '4', '5', '6', '×',
@@ -155,64 +163,54 @@ export const CalculatorCover: React.FC<CalculatorCoverProps> = ({ onUnlockReques
   ];
 
   return (
-    <div className="flex flex-col h-full max-w-md mx-auto bg-zinc-50 dark:bg-[#101718] select-none">
-      <header className="px-5 py-4 border-b border-zinc-200/80 dark:border-zinc-800/80 flex items-center justify-between">
+    <div className="flex flex-col h-full w-full bg-zinc-50 dark:bg-[#101718] select-none">
+      {/* Cover Header without revealing labels */}
+      <header className="px-5 py-4 pt-[max(1rem,env(safe-area-inset-top))] border-b border-zinc-200/80 dark:border-zinc-800/80 flex items-center justify-between shrink-0">
         <div
           data-testid="cover-title"
-          className={`cursor-pointer transition-all duration-300 select-none flex items-center gap-2 ${
-            isPressing ? 'opacity-50 scale-95' : 'opacity-100'
+          className={`cursor-pointer transition-opacity duration-200 select-none flex items-center ${
+            isHeaderPressing ? 'opacity-60 scale-95' : 'opacity-100'
           }`}
-          onMouseDown={startPress}
-          onMouseUp={cancelPress}
-          onMouseLeave={cancelPress}
-          onTouchStart={startPress}
-          onTouchEnd={cancelPress}
-          onTouchCancel={cancelPress}
-          title="Hold to unlock protected vault"
+          onPointerDown={startHeaderPress}
+          onPointerUp={cancelHeaderPress}
+          onPointerCancel={cancelHeaderPress}
+          onPointerLeave={cancelHeaderPress}
         >
           <span className="text-xl font-bold tracking-tight text-zinc-800 dark:text-zinc-100">
             Calculator
           </span>
-          <span className="text-[10px] uppercase font-mono px-1.5 py-0.5 rounded bg-zinc-200 dark:bg-zinc-800 text-zinc-500">
-            Cover
-          </span>
         </div>
-        <button
-          onClick={onUnlockRequested}
-          className="text-xs text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-300 underline"
-          title="Unlock vault"
-        >
-          Unlock
-        </button>
       </header>
 
+      {/* Screen / Display Area */}
       <div className="flex-1 flex flex-col justify-end px-6 py-6 overflow-hidden">
-        <div className="text-right text-xs text-zinc-400 mb-1 h-4 font-mono">
+        <div className="text-right text-sm text-zinc-400 mb-1 h-5 font-mono">
           {left !== null && operator ? `${left} ${operator}` : ''}
         </div>
         <div
           data-testid="calculator-display"
-          className="text-right text-5xl font-light tracking-tight font-mono overflow-x-auto whitespace-nowrap text-zinc-900 dark:text-zinc-50"
+          className="text-right text-5xl md:text-6xl font-light tracking-tight font-mono overflow-x-auto whitespace-nowrap text-zinc-900 dark:text-zinc-50"
         >
           {display}
         </div>
       </div>
 
-      <div className="p-4 pb-8 grid grid-cols-4 gap-3">
+      {/* Responsive Fullscreen Keypad Grid */}
+      <div className="p-4 pb-[max(1.5rem,env(safe-area-inset-bottom))] grid grid-cols-4 grid-rows-4 gap-3 h-[52%] shrink-0">
         {keys.map((key) => {
           const role = roleFor(key);
+          const isEquals = key === '=';
           return (
             <button
               key={key}
+              type="button"
               data-testid={`calculator-key-${key}`}
               onClick={() => press(key)}
-              onMouseDown={key === '=' ? startEqualsPress : undefined}
-              onMouseUp={key === '=' ? cancelEqualsPress : undefined}
-              onMouseLeave={key === '=' ? cancelEqualsPress : undefined}
-              onTouchStart={key === '=' ? startEqualsPress : undefined}
-              onTouchEnd={key === '=' ? cancelEqualsPress : undefined}
-              onTouchCancel={key === '=' ? cancelEqualsPress : undefined}
-              className={`h-16 rounded-2xl text-2xl font-medium transition-all shadow-sm flex items-center justify-center ${buttonStyle(
+              onPointerDown={isEquals ? startEqualsPress : undefined}
+              onPointerUp={isEquals ? cancelEqualsPress : undefined}
+              onPointerCancel={isEquals ? cancelEqualsPress : undefined}
+              onPointerLeave={isEquals ? cancelEqualsPress : undefined}
+              className={`h-full min-h-[56px] rounded-2xl text-2xl font-medium transition-all shadow-xs flex items-center justify-center ${buttonStyle(
                 role
               )}`}
             >

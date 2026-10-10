@@ -1,11 +1,11 @@
-import { CloneApp, CloneProfileState, CloneEngineMode } from '../../types';
+import { CloneApp, CloneProfileState } from '../../types';
+import { nativeCloneBridge } from './nativeCloneBridge';
 
-export const CATALOG_PRESETS: CloneApp[] = [
-  // Built-in Secure Apps (Samsung One UI defaults)
+export const BUILTIN_VAULT_APPS: CloneApp[] = [
   {
     id: 'gallery',
-    name: 'Bộ sưu tập',
-    packageName: 'com.sec.android.gallery3d',
+    name: 'Bộ sưu tập Bảo mật',
+    packageName: 'io.privatevault.gallery',
     category: 'system',
     status: 'cloned',
     iconColor: '#00a389',
@@ -14,8 +14,8 @@ export const CATALOG_PRESETS: CloneApp[] = [
   },
   {
     id: 'camera',
-    name: 'Máy ảnh',
-    packageName: 'com.sec.android.app.camera',
+    name: 'Máy ảnh Bảo mật',
+    packageName: 'io.privatevault.camera',
     category: 'system',
     status: 'cloned',
     iconColor: '#e11d48',
@@ -24,8 +24,8 @@ export const CATALOG_PRESETS: CloneApp[] = [
   },
   {
     id: 'notes',
-    name: 'Samsung Notes',
-    packageName: 'com.samsung.android.app.notes',
+    name: 'Ghi chú Bảo mật',
+    packageName: 'io.privatevault.notes',
     category: 'system',
     status: 'cloned',
     iconColor: '#f59e0b',
@@ -33,9 +33,19 @@ export const CATALOG_PRESETS: CloneApp[] = [
     isBuiltinSecureApp: true,
   },
   {
+    id: 'files',
+    name: 'File Bảo mật',
+    packageName: 'io.privatevault.files',
+    category: 'system',
+    status: 'cloned',
+    iconColor: '#d97706',
+    iconType: 'files',
+    isBuiltinSecureApp: true,
+  },
+  {
     id: 'browser',
-    name: 'Internet',
-    packageName: 'com.sec.android.app.sbrowser',
+    name: 'Trình duyệt Ẩn danh',
+    packageName: 'io.privatevault.browser',
     category: 'system',
     status: 'cloned',
     iconColor: '#3b82f6',
@@ -43,132 +53,32 @@ export const CATALOG_PRESETS: CloneApp[] = [
     isBuiltinSecureApp: true,
   },
   {
-    id: 'files',
-    name: 'File của bạn',
-    packageName: 'com.sec.android.app.myfiles',
+    id: 'audio',
+    name: 'Ghi âm Bảo mật',
+    packageName: 'io.privatevault.audio',
     category: 'system',
     status: 'cloned',
-    iconColor: '#d97706',
-    iconType: 'files',
+    iconColor: '#8b5cf6',
+    iconType: 'audio',
     isBuiltinSecureApp: true,
-  },
-  // User Cloned Apps (Active)
-  {
-    id: 'zalo',
-    name: 'Zalo',
-    packageName: 'com.zing.zalo',
-    category: 'messaging',
-    status: 'cloned',
-    iconColor: '#0068ff',
-    lastLaunchedAt: new Date(Date.now() - 1800000).toISOString(),
-    dataSizeBytes: 42 * 1024 * 1024,
-    badgeCount: 2,
-  },
-  {
-    id: 'telegram',
-    name: 'Telegram',
-    packageName: 'org.telegram.messenger',
-    category: 'messaging',
-    status: 'cloned',
-    iconColor: '#24A1DE',
-    lastLaunchedAt: new Date(Date.now() - 3600000).toISOString(),
-    dataSizeBytes: 68 * 1024 * 1024,
-    badgeCount: 1,
-  },
-  {
-    id: 'vcb',
-    name: 'VCB Digibank',
-    packageName: 'com.VCB',
-    category: 'finance',
-    status: 'cloned',
-    iconColor: '#005a3c',
-    lastLaunchedAt: new Date(Date.now() - 7200000).toISOString(),
-    dataSizeBytes: 24 * 1024 * 1024,
-  },
-  // Available to clone from device
-  {
-    id: 'facebook',
-    name: 'Facebook',
-    packageName: 'com.facebook.katana',
-    category: 'social',
-    status: 'uncloned',
-    iconColor: '#1877F2',
-  },
-  {
-    id: 'messenger',
-    name: 'Messenger',
-    packageName: 'com.facebook.orca',
-    category: 'messaging',
-    status: 'uncloned',
-    iconColor: '#00B2FF',
-  },
-  {
-    id: 'whatsapp',
-    name: 'WhatsApp',
-    packageName: 'com.whatsapp',
-    category: 'messaging',
-    status: 'uncloned',
-    iconColor: '#25D366',
-  },
-  {
-    id: 'tiktok',
-    name: 'TikTok',
-    packageName: 'com.zhiliaoapp.musically',
-    category: 'social',
-    status: 'uncloned',
-    iconColor: '#000000',
-  },
-  {
-    id: 'mbbank',
-    name: 'MB Bank',
-    packageName: 'com.mbmobile',
-    category: 'finance',
-    status: 'uncloned',
-    iconColor: '#1e40af',
-  },
-  {
-    id: 'binance',
-    name: 'Binance',
-    packageName: 'com.binance.dev',
-    category: 'finance',
-    status: 'uncloned',
-    iconColor: '#f59e0b',
-  },
-  {
-    id: 'twitter',
-    name: 'X (Twitter)',
-    packageName: 'com.twitter.android',
-    category: 'social',
-    status: 'uncloned',
-    iconColor: '#111827',
   },
 ];
 
 export class CloneService {
-  private static STATE_KEY = 'pv_clone_state_v2';
-  private static APPS_KEY = 'pv_clone_apps_v2';
+  private static APPS_KEY = 'pv_native_clone_apps_v2';
 
-  loadState(): CloneProfileState {
-    try {
-      const raw = localStorage.getItem(CloneService.STATE_KEY);
-      if (raw) return JSON.parse(raw);
-    } catch {}
+  async getProfileState(): Promise<CloneProfileState> {
+    const bridgeState = await nativeCloneBridge.getProfileStatus();
+    const shizuku = await nativeCloneBridge.isShizukuAvailable();
+
     return {
-      engine: 'work_profile',
-      isProvisioned: true,
-      isPaused: false,
-      profileUserId: 10,
-      shizukuAvailable: false,
-      dpcAdminGranted: true,
+      engine: 'shizuku_clone',
+      isProvisioned: bridgeState.profileExists,
+      isPaused: bridgeState.isPaused,
+      profileUserId: bridgeState.profileUserId,
+      shizukuAvailable: shizuku.available && shizuku.authorized,
+      dpcAdminGranted: false, // DPC/Work profile is deprecated in favor of profile.CLONE
     };
-  }
-
-  saveState(state: CloneProfileState): void {
-    try {
-      localStorage.setItem(CloneService.STATE_KEY, JSON.stringify(state));
-    } catch (err) {
-      console.error('Failed to save clone state:', err);
-    }
   }
 
   loadApps(): CloneApp[] {
@@ -176,101 +86,69 @@ export class CloneService {
       const raw = localStorage.getItem(CloneService.APPS_KEY);
       if (raw) {
         const parsed = JSON.parse(raw);
-        // Ensure built-in apps are present
-        const hasGallery = parsed.some((a: CloneApp) => a.id === 'gallery');
-        if (hasGallery) return parsed;
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          return parsed;
+        }
       }
     } catch {}
-    return [...CATALOG_PRESETS];
+    return [...BUILTIN_VAULT_APPS];
   }
 
   saveApps(apps: CloneApp[]): void {
     try {
       localStorage.setItem(CloneService.APPS_KEY, JSON.stringify(apps));
     } catch (err) {
-      console.error('Failed to save clone apps:', err);
+      console.error('Failed to save clone apps list:', err);
     }
   }
 
-  switchEngine(targetEngine: CloneEngineMode, currentState: CloneProfileState): CloneProfileState {
-    const next: CloneProfileState = {
-      ...currentState,
-      engine: targetEngine,
-      profileUserId: targetEngine === 'work_profile' ? 10 : 999,
-    };
-    this.saveState(next);
-    return next;
-  }
+  async clonePackage(packageName: string, appName: string, profileUserId: number): Promise<CloneApp[]> {
+    await nativeCloneBridge.clonePackage({ packageName, profileUserId });
+    const current = this.loadApps();
+    const existing = current.find((a) => a.packageName === packageName);
 
-  togglePauseProfile(currentState: CloneProfileState, apps: CloneApp[]): {
-    state: CloneProfileState;
-    apps: CloneApp[];
-  } {
-    const nextPaused = !currentState.isPaused;
-    const nextState: CloneProfileState = {
-      ...currentState,
-      isPaused: nextPaused,
-    };
-    const nextApps = apps.map((app) => {
-      if (app.status === 'cloned' && !app.isBuiltinSecureApp && nextPaused) {
-        return { ...app, status: 'paused' as const };
-      }
-      if (app.status === 'paused' && !nextPaused) {
-        return { ...app, status: 'cloned' as const };
-      }
-      return app;
-    });
-
-    this.saveState(nextState);
-    this.saveApps(nextApps);
-    return { state: nextState, apps: nextApps };
-  }
-
-  cloneApp(appId: string, apps: CloneApp[]): CloneApp[] {
-    const next = apps.map((a) => {
-      if (a.id === appId) {
-        return {
-          ...a,
-          status: 'cloned' as const,
-          dataSizeBytes: 18 * 1024 * 1024,
-          lastLaunchedAt: new Date().toISOString(),
-        };
-      }
-      return a;
-    });
+    let next: CloneApp[];
+    if (existing) {
+      next = current.map((a) =>
+        a.packageName === packageName ? { ...a, status: 'cloned' as const } : a
+      );
+    } else {
+      const newApp: CloneApp = {
+        id: `clone-${Date.now()}`,
+        name: appName,
+        packageName,
+        category: 'custom',
+        status: 'cloned',
+        iconColor: '#00a389',
+        lastLaunchedAt: new Date().toISOString(),
+      };
+      next = [...current, newApp];
+    }
     this.saveApps(next);
     return next;
   }
 
-  removeClone(appId: string, apps: CloneApp[]): CloneApp[] {
-    const next = apps.map((a) => {
-      if (a.id === appId) {
-        return {
-          ...a,
-          status: 'uncloned' as const,
-          dataSizeBytes: undefined,
-          lastLaunchedAt: undefined,
-        };
-      }
-      return a;
-    });
+  async removeClone(app: CloneApp, profileUserId: number | null): Promise<CloneApp[]> {
+    if (profileUserId && !app.isBuiltinSecureApp) {
+      await nativeCloneBridge.removePackage({ packageName: app.packageName, profileUserId });
+    }
+    const current = this.loadApps();
+    const next = current.filter((a) => a.id !== app.id);
     this.saveApps(next);
     return next;
   }
 
-  addCustomPackage(name: string, packageName: string, apps: CloneApp[]): CloneApp[] {
-    const newApp: CloneApp = {
-      id: `custom-${Date.now()}`,
-      name: name.trim(),
-      packageName: packageName.trim(),
-      category: 'custom',
-      status: 'cloned',
-      iconColor: '#00a389',
-      dataSizeBytes: 14 * 1024 * 1024,
-      lastLaunchedAt: new Date().toISOString(),
-    };
-    const next = [...apps, newApp];
-    this.saveApps(next);
-    return next;
+  async launchApp(app: CloneApp, profileUserId: number | null): Promise<boolean> {
+    if (app.isBuiltinSecureApp) {
+      return true;
+    }
+    if (!profileUserId) {
+      throw new Error('Chưa thiết lập hồ sơ clone profile.CLONE trên hệ điều hành Android.');
+    }
+    const res = await nativeCloneBridge.launchPackageInProfile({
+      packageName: app.packageName,
+      profileUserId,
+    });
+    return res.success;
   }
 }

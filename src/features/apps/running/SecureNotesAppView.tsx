@@ -4,6 +4,7 @@ import {
   Plus,
   Trash2,
   FileText,
+  AlertCircle,
 } from 'lucide-react';
 import { LocalVaultRepository } from '../../vault/vaultRepository';
 import { VaultItem } from '../../../types';
@@ -22,6 +23,8 @@ export const SecureNotesAppView: React.FC<SecureNotesAppViewProps> = ({
   const [noteContent, setNoteContent] = useState('');
   const [noteTitle, setNoteTitle] = useState('');
   const [isEditing, setIsEditing] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const [isSaving, setIsSaving] = useState(false);
 
   const loadNotes = async () => {
     try {
@@ -39,6 +42,7 @@ export const SecureNotesAppView: React.FC<SecureNotesAppViewProps> = ({
   const handleOpenNote = async (item: VaultItem) => {
     setSelectedNote(item);
     setNoteTitle(item.name || 'Ghi chú');
+    setSaveError(null);
     try {
       const data = await repository.readBytes(item.id);
       setNoteContent(new TextDecoder().decode(data.bytes));
@@ -52,6 +56,7 @@ export const SecureNotesAppView: React.FC<SecureNotesAppViewProps> = ({
     setSelectedNote(null);
     setNoteTitle('');
     setNoteContent('');
+    setSaveError(null);
     setIsEditing(true);
   };
 
@@ -59,27 +64,45 @@ export const SecureNotesAppView: React.FC<SecureNotesAppViewProps> = ({
     if (!noteContent.trim() && !noteTitle.trim()) return;
     const title = noteTitle.trim() || 'Ghi chú không tên';
     const bytes = new TextEncoder().encode(noteContent);
+    setIsSaving(true);
+    setSaveError(null);
 
-    if (selectedNote) {
-      await repository.delete(selectedNote.id);
+    try {
+      if (selectedNote) {
+        // A04 fix: Atomic update without delete-before-save!
+        await repository.updateNoteContent(selectedNote.id, bytes, title);
+      } else {
+        await repository.addBytes(bytes, {
+          kind: 'note',
+          name: title,
+          album: 'Ghi chú',
+        });
+      }
+
+      setIsEditing(false);
+      setSelectedNote(null);
+      await loadNotes();
+    } catch (err) {
+      console.error('Lỗi khi lưu ghi chú:', err);
+      // Draft and existing note remain intact!
+      setSaveError('Lưu ghi chú thất bại. Bản nháp và ghi chú gốc vẫn được giữ nguyên.');
+    } finally {
+      setIsSaving(false);
     }
-
-    await repository.addBytes(bytes, {
-      kind: 'note',
-      name: title,
-      album: 'Ghi chú',
-    });
-
-    setIsEditing(false);
-    setSelectedNote(null);
-    await loadNotes();
   };
 
   const handleDeleteNote = async (item: VaultItem) => {
-    if (!window.confirm('Xóa ghi chú này?')) return;
-    await repository.delete(item.id);
-    if (selectedNote?.id === item.id) setSelectedNote(null);
-    await loadNotes();
+    if (!window.confirm('Xóa ghi chú này vĩnh viễn khỏi kho mã hóa?')) return;
+    try {
+      await repository.delete(item.id);
+      if (selectedNote?.id === item.id) {
+        setSelectedNote(null);
+        setIsEditing(false);
+      }
+      await loadNotes();
+    } catch (err) {
+      alert('Không thể xóa ghi chú: ' + (err instanceof Error ? err.message : String(err)));
+    }
   };
 
   return (
@@ -88,14 +111,14 @@ export const SecureNotesAppView: React.FC<SecureNotesAppViewProps> = ({
       <div className="bg-amber-500 text-white px-3.5 py-3 flex items-center justify-between shadow-md shrink-0">
         <div className="flex items-center gap-2.5">
           <button
-            onClick={selectedNote || isEditing ? () => { setSelectedNote(null); setIsEditing(false); } : onBack}
+            onClick={selectedNote || isEditing ? () => { setSelectedNote(null); setIsEditing(false); setSaveError(null); } : onBack}
             className="p-1 rounded-full hover:bg-white/20"
           >
             <ChevronLeft className="w-5 h-5" />
           </button>
           <div>
             <h3 className="text-sm font-bold">
-              {isEditing ? 'Soạn ghi chú' : selectedNote ? selectedNote.name : 'Samsung Notes'}
+              {isEditing ? 'Soạn ghi chú' : selectedNote ? selectedNote.name : 'Ghi chú Bảo mật'}
             </h3>
             <p className="text-[10px] text-white/80">Mã hóa AES-256 trong Thư mục Bảo mật</p>
           </div>
@@ -105,9 +128,10 @@ export const SecureNotesAppView: React.FC<SecureNotesAppViewProps> = ({
           {isEditing ? (
             <button
               onClick={handleSaveNote}
-              className="px-3 py-1 bg-white text-amber-600 font-bold rounded-lg text-xs hover:bg-white/90"
+              disabled={isSaving}
+              className="px-3 py-1 bg-white text-amber-600 font-bold rounded-lg text-xs hover:bg-white/90 disabled:opacity-50"
             >
-              Lưu
+              {isSaving ? 'Đang lưu...' : 'Lưu'}
             </button>
           ) : !selectedNote ? (
             <button
@@ -127,6 +151,13 @@ export const SecureNotesAppView: React.FC<SecureNotesAppViewProps> = ({
           )}
         </div>
       </div>
+
+      {saveError && (
+        <div className="p-3 bg-rose-50 dark:bg-rose-950/60 border-b border-rose-200 dark:border-rose-900 text-rose-700 dark:text-rose-300 text-xs flex items-center gap-2">
+          <AlertCircle className="w-4 h-4 shrink-0" />
+          <span>{saveError}</span>
+        </div>
+      )}
 
       {/* Body */}
       {isEditing ? (

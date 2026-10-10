@@ -8,6 +8,8 @@ export interface VaultItem {
   createdAt: string; // ISO string
   name?: string;
   size?: number;
+  mimeType?: string;
+  sourceHash?: string;
   album?: string;
   isFavorite?: boolean;
   thumbnail?: string;
@@ -65,7 +67,7 @@ export interface BrowserProfile {
   label: string;
 }
 
-export type CloneEngineMode = 'work_profile' | 'shizuku_clone';
+export type CloneEngineMode = 'shizuku_clone' | 'work_profile';
 
 export interface CloneApp {
   id: string;
@@ -85,7 +87,7 @@ export interface CloneProfileState {
   engine: CloneEngineMode;
   isProvisioned: boolean;
   isPaused: boolean;
-  profileUserId: number;
+  profileUserId: number | null;
   shizukuAvailable: boolean;
   dpcAdminGranted: boolean;
 }

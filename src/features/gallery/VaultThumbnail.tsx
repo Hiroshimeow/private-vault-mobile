@@ -33,12 +33,22 @@ export const VaultThumbnail: React.FC<VaultThumbnailProps> = ({
       .readBytes(item.id)
       .then((data) => {
         if (!isMounted) return;
+        const ext = data.name.split('.').pop()?.toLowerCase();
+        const mimeMap: Record<string, string> = {
+          jpg: 'image/jpeg',
+          jpeg: 'image/jpeg',
+          png: 'image/png',
+          webp: 'image/webp',
+          svg: 'image/svg+xml',
+          gif: 'image/gif',
+          mp4: 'video/mp4',
+          webm: 'video/webm',
+          mov: 'video/quicktime',
+        };
         const mime =
-          data.kind === 'video'
-            ? 'video/mp4'
-            : data.name.endsWith('.svg')
-            ? 'image/svg+xml'
-            : 'image/png';
+          data.mimeType ||
+          (ext ? mimeMap[ext] : null) ||
+          (data.kind === 'video' ? 'video/mp4' : 'image/jpeg');
         const blob = new Blob([data.bytes], { type: mime });
         const createdUrl = URL.createObjectURL(blob);
         thumbnailCache.set(item.id, createdUrl);

@@ -60,7 +60,7 @@ export const SecretWorkspace: React.FC<SecretWorkspaceProps> = ({
   };
 
   return (
-    <div className="flex flex-col h-full max-w-md mx-auto bg-[#0d1314] text-zinc-100 select-none overflow-hidden font-sans">
+    <div className="flex flex-col h-full w-full bg-[#0d1314] text-zinc-100 select-none overflow-hidden font-sans">
       {/* Top Main Status Bar */}
       <header className="px-4 py-3 border-b border-zinc-800 bg-[#131b1d] flex items-center justify-between shrink-0 shadow-xs">
         <div className="flex items-center gap-2">

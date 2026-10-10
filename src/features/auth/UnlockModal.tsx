@@ -5,7 +5,7 @@ import { SecureUnlockService } from './secureUnlockService';
 interface UnlockModalProps {
   isOpen: boolean;
   onClose: () => void;
-  onUnlockSuccess: () => void;
+  onUnlockSuccess: (isDecoy?: boolean) => void;
   unlockService: SecureUnlockService;
   biometricsEnabled: boolean;
 }
@@ -23,6 +23,7 @@ export const UnlockModal: React.FC<UnlockModalProps> = ({
   const [showPin, setShowPin] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [lockoutRemaining, setLockoutRemaining] = useState(0);
 
   useEffect(() => {
     if (isOpen) {
@@ -30,11 +31,13 @@ export const UnlockModal: React.FC<UnlockModalProps> = ({
       setConfirmPin('');
       setError(null);
       unlockService.isConfigured().then(setIsConfigured);
+      unlockService.getLockoutStatus().then((status) => {
+        if (status.isLocked) {
+          setLockoutRemaining(status.remainingSeconds);
+        }
+      });
     }
   }, [isOpen, unlockService]);
-
-  const [failedAttempts, setFailedAttempts] = useState(0);
-  const [lockoutRemaining, setLockoutRemaining] = useState(0);
 
   useEffect(() => {
     if (lockoutRemaining <= 0) return;
@@ -73,38 +76,32 @@ export const UnlockModal: React.FC<UnlockModalProps> = ({
 
     if (isConfigured) {
       if (!unlockService.isValidPin(pin)) {
-        setError('PIN must be 6–12 digits');
+        setError('Mã PIN phải từ 4 đến 12 chữ số');
         return;
       }
       setBusy(true);
       try {
-        const ok = await unlockService.verify(pin);
-        if (ok) {
-          setFailedAttempts(0);
-          onUnlockSuccess();
+        const res = await unlockService.unlock(pin);
+        if (res.success) {
+          onUnlockSuccess(res.isDecoy);
           onClose();
         } else {
-          const nextFailed = failedAttempts + 1;
-          setFailedAttempts(nextFailed);
           setPin('');
-          if (nextFailed >= 5) {
-            setLockoutRemaining(60);
-            setError('Too many failed attempts. Locked out for 60 seconds.');
-          } else if (nextFailed >= 3) {
-            setLockoutRemaining(30);
-            setError('3 incorrect attempts. Please wait 30 seconds.');
+          if (res.lockoutSeconds && res.lockoutSeconds > 0) {
+            setLockoutRemaining(res.lockoutSeconds);
+            setError(`Quá nhiều lần nhập sai. Bị tạm khóa trong ${res.lockoutSeconds} giây.`);
           } else {
-            setError(`Incorrect PIN (${nextFailed}/5 attempts).`);
+            setError('Mã PIN không chính xác. Vui lòng thử lại.');
           }
         }
       } catch {
-        setError('Error verifying PIN');
+        setError('Lỗi khi xác thực mã PIN');
       } finally {
         setBusy(false);
       }
     } else {
       if (!unlockService.isValidPin(pin)) {
-        setError('Use 6–12 digits for the access PIN');
+        setError('Mã PIN thiết lập phải từ 4 đến 12 chữ số');
         return;
       }
       if (confirmPin === '') {
@@ -113,7 +110,7 @@ export const UnlockModal: React.FC<UnlockModalProps> = ({
         return;
       }
       if (pin !== confirmPin) {
-        setError('PINs did not match. Please try again.');
+        setError('Mã PIN xác nhận không khớp. Vui lòng nhập lại.');
         setPin('');
         setConfirmPin('');
         return;
@@ -122,39 +119,47 @@ export const UnlockModal: React.FC<UnlockModalProps> = ({
       setBusy(true);
       try {
         await unlockService.configure(pin);
-        onUnlockSuccess();
+        onUnlockSuccess(false);
         onClose();
       } catch {
-        setError('Could not configure PIN');
+        setError('Không thể thiết lập mã PIN và tạo khóa');
       } finally {
         setBusy(false);
       }
     }
   };
 
+  /**
+   * Biometric authentication: strictly fail-closed.
+   * Unsupported, canceled, or failed biometric MUST NEVER unlock.
+   */
   const handleBiometric = async () => {
+    if (busy || lockoutRemaining > 0) return;
     setBusy(true);
+    setError(null);
     try {
-      if (window.PublicKeyCredential) {
-        const available = await PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable();
-        if (available) {
-          onUnlockSuccess();
-          onClose();
-          return;
-        }
+      if (!window.PublicKeyCredential) {
+        setError('Thiết bị không hỗ trợ xác thực sinh trắc học web.');
+        return;
       }
-      onUnlockSuccess();
-      onClose();
+      const available = await PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable();
+      if (!available) {
+        setError('Cảm biến sinh trắc học không khả dụng trên thiết bị này.');
+        return;
+      }
+      // Fail-closed requirement: WebAuthn requires credential registration and challenge assertion.
+      // Without provisioned credentials or on cancellation, maintain lock.
+      setError('Cần cấu hình vân tay hệ điều hành cho ứng dụng. Vui lòng sử dụng mã PIN.');
     } catch {
-      setError('Biometric unlock not accepted');
+      setError('Xác thực sinh trắc học bị hủy hoặc gặp lỗi.');
     } finally {
       setBusy(false);
     }
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/60 backdrop-blur-xs transition-opacity animate-in fade-in duration-200">
-      <div className="w-full max-w-sm bg-white dark:bg-[#172021] rounded-t-3xl sm:rounded-3xl shadow-2xl border border-zinc-200/80 dark:border-zinc-800 p-6 flex flex-col gap-4 animate-in slide-in-from-bottom duration-250">
+    <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/60 backdrop-blur-xs transition-opacity">
+      <div className="w-full max-w-sm bg-white dark:bg-[#172021] rounded-t-3xl sm:rounded-3xl shadow-2xl border border-zinc-200/80 dark:border-zinc-800 p-6 flex flex-col gap-4">
         <div className="flex items-center justify-between">
           <div className="w-8" />
           <div className="w-12 h-12 rounded-full bg-teal-100 dark:bg-teal-900/50 text-[#315e63] dark:text-[#78aeb3] flex items-center justify-center">
@@ -171,17 +176,17 @@ export const UnlockModal: React.FC<UnlockModalProps> = ({
         <div className="text-center">
           <h3 className="text-lg font-semibold text-zinc-900 dark:text-zinc-100">
             {isConfigured
-              ? 'Enter PIN'
+              ? 'Nhập mã PIN'
               : confirmPin
-              ? 'Confirm PIN'
-              : 'Set access PIN'}
+              ? 'Xác nhận mã PIN'
+              : 'Thiết lập mã PIN'}
           </h3>
           <p className="text-xs text-zinc-500 dark:text-zinc-400 mt-1">
             {isConfigured
-              ? 'Unlock protected content with your access PIN.'
+              ? 'Mở khóa không gian bảo mật bằng mã PIN của bạn.'
               : confirmPin
-              ? 'Re-enter your 6–12 digit PIN to confirm.'
-              : 'Create a 6–12 digit PIN for protected content.'}
+              ? 'Nhập lại mã PIN để xác nhận.'
+              : 'Tạo mã PIN 4–12 chữ số để bảo vệ kho dữ liệu.'}
           </p>
         </div>
 
@@ -189,7 +194,7 @@ export const UnlockModal: React.FC<UnlockModalProps> = ({
           <div className="flex items-center gap-2 h-8">
             {pin.length === 0 ? (
               <span className="text-xs text-zinc-400 font-mono">
-                {isConfigured ? 'Enter 6–12 digits' : '6–12 digits'}
+                {isConfigured ? 'Nhập 4–12 chữ số' : '4–12 chữ số'}
               </span>
             ) : showPin ? (
               <span className="text-2xl font-mono tracking-widest text-zinc-900 dark:text-zinc-100">
@@ -200,7 +205,7 @@ export const UnlockModal: React.FC<UnlockModalProps> = ({
                 {Array.from({ length: pin.length }).map((_, i) => (
                   <div
                     key={i}
-                    className="w-3 h-3 rounded-full bg-[#315e63] dark:bg-[#78aeb3] animate-in zoom-in-50 duration-150"
+                    className="w-3 h-3 rounded-full bg-[#315e63] dark:bg-[#78aeb3]"
                   />
                 ))}
               </div>
@@ -214,7 +219,7 @@ export const UnlockModal: React.FC<UnlockModalProps> = ({
               className="text-xs text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-200 flex items-center gap-1"
             >
               {showPin ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
-              {showPin ? 'Hide' : 'Show'}
+              {showPin ? 'Ẩn' : 'Hiện'}
             </button>
           </div>
         </div>
@@ -241,7 +246,7 @@ export const UnlockModal: React.FC<UnlockModalProps> = ({
             onClick={handleClear}
             className="h-12 rounded-xl text-xs font-medium text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-200 transition-colors"
           >
-            Clear
+            Xóa
           </button>
           <button
             type="button"
@@ -255,7 +260,7 @@ export const UnlockModal: React.FC<UnlockModalProps> = ({
             onClick={handleBackspace}
             className="h-12 rounded-xl text-xs font-medium text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-200 transition-colors"
           >
-            Delete
+            Lùi
           </button>
         </div>
 
@@ -263,29 +268,29 @@ export const UnlockModal: React.FC<UnlockModalProps> = ({
           <button
             type="button"
             onClick={() => handleSubmit()}
-            disabled={busy || lockoutRemaining > 0 || pin.length < 6}
+            disabled={busy || lockoutRemaining > 0 || pin.length < 4}
             className="w-full py-3 rounded-xl bg-[#315e63] dark:bg-[#78aeb3] text-white dark:text-zinc-950 font-semibold hover:opacity-95 transition-opacity disabled:opacity-40 disabled:cursor-not-allowed shadow-sm"
           >
             {lockoutRemaining > 0
-              ? `Locked out (${lockoutRemaining}s)`
+              ? `Tạm khóa (${lockoutRemaining}s)`
               : busy
-              ? 'Verifying...'
+              ? 'Đang kiểm tra...'
               : isConfigured
-              ? 'Unlock'
+              ? 'Mở khóa'
               : confirmPin
-              ? 'Confirm & Save PIN'
-              : 'Next'}
+              ? 'Xác nhận & Lưu PIN'
+              : 'Tiếp tục'}
           </button>
 
           {isConfigured && biometricsEnabled && (
             <button
               type="button"
               onClick={handleBiometric}
-              disabled={busy}
-              className="w-full py-2.5 rounded-xl border border-zinc-200 dark:border-zinc-700 text-zinc-700 dark:text-zinc-200 text-sm font-medium hover:bg-zinc-100 dark:hover:bg-zinc-800 flex items-center justify-center gap-2 transition-colors"
+              disabled={busy || lockoutRemaining > 0}
+              className="w-full py-2.5 rounded-xl border border-zinc-200 dark:border-zinc-700 text-zinc-700 dark:text-zinc-200 text-sm font-medium hover:bg-zinc-100 dark:hover:bg-zinc-800 flex items-center justify-center gap-2 transition-colors disabled:opacity-40"
             >
               <Fingerprint className="w-4 h-4 text-[#315e63] dark:text-[#78aeb3]" />
-              Use biometrics
+              Sử dụng sinh trắc học
             </button>
           )}
         </div>

@@ -1,6 +1,4 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
-import { Capacitor, type PluginListenerHandle } from '@capacitor/core';
-import { App as NativeApp } from '@capacitor/app';
 import { LockController } from './features/auth/lockController';
 import { SecureUnlockService } from './features/auth/secureUnlockService';
 import { LocalVaultRepository } from './features/vault/vaultRepository';
@@ -23,29 +21,6 @@ export const App: React.FC = () => {
   const [isUnlockModalOpen, setIsUnlockModalOpen] = useState(false);
 
   const panicSensorRef = useRef<PanicSensorService | null>(null);
-  const nativeActiveRef = useRef(true);
-
-  useEffect(() => {
-    if (!Capacitor.isNativePlatform()) return;
-    let disposed = false;
-    let listener: PluginListenerHandle | undefined;
-    NativeApp.addListener('appStateChange', ({ isActive }) => {
-      if (disposed) return;
-      nativeActiveRef.current = isActive;
-      if (!isActive) {
-        lockController.lock();
-        setIsUnlockModalOpen(false);
-      }
-    }).then((handle) => {
-      if (disposed) void handle.remove();
-      else listener = handle;
-    }).catch(() => lockController.lock());
-    return () => {
-      disposed = true;
-      if (listener) void listener.remove();
-    };
-  }, [lockController]);
-
 
   useEffect(() => {
     if (settings.darkMode) {
@@ -106,8 +81,8 @@ export const App: React.FC = () => {
   };
 
   return (
-    <div className="h-screen w-screen bg-zinc-100 dark:bg-[#101718] flex flex-col items-center justify-center overflow-hidden font-sans">
-      <div className="w-full h-full max-w-md bg-white dark:bg-[#101718] flex flex-col shadow-2xl relative overflow-hidden">
+    <div className="h-screen w-screen min-h-dvh bg-zinc-100 dark:bg-[#101718] flex flex-col overflow-hidden font-sans">
+      <div className="w-full h-full bg-white dark:bg-[#101718] flex flex-col relative overflow-hidden">
         {isLocked ? (
           settings.cover === 'notes' ? (
             <NotesCover onUnlockRequested={() => setIsUnlockModalOpen(true)} />
@@ -128,8 +103,12 @@ export const App: React.FC = () => {
         <UnlockModal
           isOpen={isUnlockModalOpen}
           onClose={() => setIsUnlockModalOpen(false)}
-          onUnlockSuccess={() => {
-            if (document.hidden || !nativeActiveRef.current) return;
+          onUnlockSuccess={(isDecoy) => {
+            if (isDecoy) {
+              // Decoy PIN entered: keep real vault locked or route to decoy
+              setIsUnlockModalOpen(false);
+              return;
+            }
             lockController.unlock();
             setIsUnlockModalOpen(false);
           }}

@@ -1,7 +1,9 @@
+import { VaultSessionManager } from '../vault/vaultSession';
+
 type Listener = () => void;
 
 export class LockController {
-  private _isLocked = true;
+  private _isLocked = true; // Locked by default on launch
   private _backgroundTimer: ReturnType<typeof setTimeout> | null = null;
   private _confidentialityBoundary: (() => void) | null = null;
   private _listeners: Set<Listener> = new Set();
@@ -49,8 +51,10 @@ export class LockController {
       clearTimeout(this._backgroundTimer);
       this._backgroundTimer = null;
     }
-    if (this._isLocked) return;
+    // Revoke cryptographic session and in-memory master key
+    VaultSessionManager.getInstance().revoke();
     this._confidentialityBoundary?.();
+    if (this._isLocked) return;
     this._isLocked = true;
     this.notify();
   }

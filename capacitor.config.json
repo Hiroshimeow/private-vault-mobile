@@ -1,6 +1,6 @@
 {
   "appId": "me.hculab.privatevault.web",
-  "appName": "Private Vault (Test)",
+  "appName": "Private Vault",
   "webDir": "dist",
   "server": {
     "androidScheme": "https"
