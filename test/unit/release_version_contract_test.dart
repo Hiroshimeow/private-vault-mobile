@@ -16,7 +16,7 @@ void main() {
     final rcNumber = int.parse(versionMatch.group(2)!);
     final mismatchedVersion = version.replaceFirst(
       '-rc.$rcNumber',
-      '-rc.' + (rcNumber + 1).toString(),
+      '-rc.${rcNumber + 1}',
     );
     final stableVersion = version.substring(0, version.indexOf('-rc.'));
 
