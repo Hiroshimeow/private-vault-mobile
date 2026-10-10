@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:private_vault_mobile/app/private_vault_app.dart';
-import 'package:private_vault_mobile/features/apps/clone_profile_client.dart';
+import 'package:private_vault_mobile/features/apps/standalone_clone_client.dart';
 import 'package:private_vault_mobile/features/apps/work_profile_client.dart';
 import 'package:private_vault_mobile/features/apps/work_profile_models.dart';
 import 'package:private_vault_mobile/features/auth/lock_controller.dart';
@@ -91,7 +91,7 @@ void main() {
         lockController: lock,
         unlockService: _UnlockService(),
         workProfileClient: _FakeWorkProfileClient(),
-        cloneProfileClient: const UnavailableCloneProfileClient(),
+        standaloneCloneClient: const UnavailableStandaloneCloneClient(),
       ),
     );
     await tester.pumpAndSettle();

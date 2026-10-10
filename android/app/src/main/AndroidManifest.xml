@@ -102,6 +102,12 @@
         </activity>
 
         <provider
+            android:name=".StandaloneCloneArtifactProvider"
+            android:authorities="${applicationId}.clone_artifacts"
+            android:exported="false"
+            android:grantUriPermissions="true" />
+
+        <provider
             android:name=".CloneTransferProvider"
             android:authorities="${applicationId}.clone_transfer"
             android:exported="false"

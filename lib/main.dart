@@ -6,7 +6,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:private_vault_mobile/app/private_vault_app.dart';
 import 'package:private_vault_mobile/core/crypto/vault_crypto.dart';
 import 'package:private_vault_mobile/core/storage/secret_store.dart';
-import 'package:private_vault_mobile/features/apps/clone_profile_client.dart';
+import 'package:private_vault_mobile/features/apps/standalone_clone_client.dart';
 import 'package:private_vault_mobile/features/apps/vault_shuttle_service.dart';
 import 'package:private_vault_mobile/features/apps/work_profile_client.dart';
 import 'package:private_vault_mobile/features/auth/biometric_unlock.dart';
@@ -103,9 +103,9 @@ Future<void> main() async {
       workProfileClient: Platform.isAndroid
           ? PigeonWorkProfileClient()
           : const UnavailableWorkProfileClient(),
-      cloneProfileClient: Platform.isAndroid
-          ? PlatformCloneProfileClient()
-          : const UnavailableCloneProfileClient(),
+      standaloneCloneClient: Platform.isAndroid
+          ? PlatformStandaloneCloneClient()
+          : const UnavailableStandaloneCloneClient(),
       vaultShuttle: vaultShuttle,
       initialSettings: settings,
     ),

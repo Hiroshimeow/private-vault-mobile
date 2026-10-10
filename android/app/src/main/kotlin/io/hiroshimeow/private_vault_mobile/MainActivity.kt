@@ -20,7 +20,7 @@ class MainActivity : FlutterFragmentActivity() {
     private val channelName = "private_vault/platform"
     private var workProfileApiAdapter: WorkProfileHostApiAdapter? = null
     private var portableVaultTreeBridge: PortableVaultTreeBridge? = null
-    private var cloneProfileBridge: CloneProfileBridge? = null
+    private var standaloneCloneBridge: StandaloneCloneBridge? = null
     private val documentStreams = mutableMapOf<String, InputStream>()
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -40,7 +40,7 @@ class MainActivity : FlutterFragmentActivity() {
             this,
             flutterEngine.dartExecutor.binaryMessenger,
         )
-        cloneProfileBridge = CloneProfileBridge(
+        standaloneCloneBridge = StandaloneCloneBridge(
             this,
             flutterEngine.dartExecutor.binaryMessenger,
         )
@@ -148,6 +148,9 @@ class MainActivity : FlutterFragmentActivity() {
         if (portableVaultTreeBridge?.onActivityResult(requestCode, resultCode, data) == true) {
             return
         }
+        if (standaloneCloneBridge?.onActivityResult(requestCode, resultCode, data) == true) {
+            return
+        }
         if (workProfileApiAdapter?.onActivityResult(requestCode, resultCode, data) == true) {
             return
         }
@@ -157,8 +160,8 @@ class MainActivity : FlutterFragmentActivity() {
     override fun cleanUpFlutterEngine(flutterEngine: FlutterEngine) {
         portableVaultTreeBridge?.dispose()
         portableVaultTreeBridge = null
-        cloneProfileBridge?.dispose()
-        cloneProfileBridge = null
+        standaloneCloneBridge?.dispose()
+        standaloneCloneBridge = null
         documentStreams.values.forEach { input -> runCatching { input.close() } }
         documentStreams.clear()
         WorkProfileHostApi.setUp(flutterEngine.dartExecutor.binaryMessenger, null)
