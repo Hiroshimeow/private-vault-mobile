@@ -22,3 +22,10 @@ coverage/
 android/local.properties
 ios/Flutter/Generated.xcconfig
 ios/Flutter/ephemeral/
+
+# React / Capacitor generated files and signing material
+node_modules/
+dist/
+*.jks
+*.keystore
+*.log

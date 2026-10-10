@@ -1,0 +1,13 @@
+{
+  "appId": "me.hculab.privatevault.web",
+  "appName": "Private Vault (Test)",
+  "webDir": "dist",
+  "server": {
+    "androidScheme": "https"
+  },
+  "android": {
+    "path": "android-capacitor",
+    "allowMixedContent": false,
+    "webContentsDebuggingEnabled": false
+  }
+}

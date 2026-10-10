@@ -49,3 +49,11 @@ npm run dev
 # Build for production
 npm run build
 ```
+
+## Android APK built on GitHub
+
+The current React app is packaged using Capacitor in android-capacitor/. GitHub Actions compiles the web bundle and APK; local compilation is not required. CI installs dependencies from package-lock.json and checks TypeScript, packaging/auth regressions, production dependency audit, source security, Android compilation, production signing rejection and hosted emulator instrumentation.
+
+Download the explicitly labeled DEBUG-TEST-ONLY APK from a GitHub prerelease. See [Android test release and limitations](docs/release/ANDROID_TEST_RELEASE.md) and [release process](docs/release/RELEASE_PROCESS.md). This web shell does not run real cloned Android apps or ReVanced, and does not restore the previous Flutter native feature set.
+
+Authorized maintainers publish a test prerelease by pushing a new immutable android-web-vVERSION-test.N tag. Production signing has no debug-key fallback. Existing Flutter residue at android/ and ios/ is not used by the web packaging pipeline.

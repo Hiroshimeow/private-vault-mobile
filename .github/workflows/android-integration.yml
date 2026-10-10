@@ -1,66 +1,41 @@
 name: Android Integration
 
 on:
-  push:
-    branches: [main]
-  pull_request:
-  workflow_dispatch:
+  workflow_call:
 
 permissions:
   contents: read
 
-env:
-  FLUTTER_VERSION: 3.47.4
-
 jobs:
   emulator:
-    name: Android emulator RC integration
-    runs-on: ubuntu-latest
-    if: hashFiles('pubspec.yaml') != ''
+    name: Bundled WebView and privacy smoke
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
     steps:
-      - name: Checkout
-        uses: actions/checkout@v7
-
-      - name: Set up Java
-        uses: actions/setup-java@v6
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: "17"
-
-      - name: Set up Flutter
-        uses: subosito/flutter-action@v2
+          java-version: "21"
+      - uses: actions/download-artifact@v4
         with:
-          channel: stable
-          flutter-version: 3.47.4
-          cache: true
-          pub-cache: true
-
-      - name: Resolve locked dependencies
-        run: flutter pub get --enforce-lockfile
-
-      - name: Enable KVM group perms
+          name: private-vault-android-test
+          path: artifacts/
+      - name: Enable KVM permissions
         run: |
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
-          test -r /dev/kvm
-          test -w /dev/kvm
-
-      - name: Run RC integration on emulator
-        uses: reactivecircus/android-emulator-runner@v2
+      - uses: reactivecircus/android-emulator-runner@v2
         with:
           api-level: 35
           arch: x86_64
           profile: pixel_6
           disable-animations: true
-          script: flutter test integration_test/private_vault_rc_test.dart -d emulator-5554
-
-      - name: Upload integration logs
-        if: failure()
-        uses: actions/upload-artifact@v7
+          script: bash scripts/android-smoke.sh
+      - uses: actions/upload-artifact@v4
+        if: always()
         with:
-          name: android-integration-failure
-          path: |
-            build/
-          if-no-files-found: ignore
-          retention-days: 14
+          name: android-smoke-evidence
+          path: android-smoke.txt
+          if-no-files-found: error

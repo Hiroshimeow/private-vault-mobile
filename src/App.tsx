@@ -1,4 +1,6 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
+import { Capacitor, type PluginListenerHandle } from '@capacitor/core';
+import { App as NativeApp } from '@capacitor/app';
 import { LockController } from './features/auth/lockController';
 import { SecureUnlockService } from './features/auth/secureUnlockService';
 import { LocalVaultRepository } from './features/vault/vaultRepository';
@@ -21,6 +23,29 @@ export const App: React.FC = () => {
   const [isUnlockModalOpen, setIsUnlockModalOpen] = useState(false);
 
   const panicSensorRef = useRef<PanicSensorService | null>(null);
+  const nativeActiveRef = useRef(true);
+
+  useEffect(() => {
+    if (!Capacitor.isNativePlatform()) return;
+    let disposed = false;
+    let listener: PluginListenerHandle | undefined;
+    NativeApp.addListener('appStateChange', ({ isActive }) => {
+      if (disposed) return;
+      nativeActiveRef.current = isActive;
+      if (!isActive) {
+        lockController.lock();
+        setIsUnlockModalOpen(false);
+      }
+    }).then((handle) => {
+      if (disposed) void handle.remove();
+      else listener = handle;
+    }).catch(() => lockController.lock());
+    return () => {
+      disposed = true;
+      if (listener) void listener.remove();
+    };
+  }, [lockController]);
+
 
   useEffect(() => {
     if (settings.darkMode) {
@@ -104,6 +129,7 @@ export const App: React.FC = () => {
           isOpen={isUnlockModalOpen}
           onClose={() => setIsUnlockModalOpen(false)}
           onUnlockSuccess={() => {
+            if (document.hidden || !nativeActiveRef.current) return;
             lockController.unlock();
             setIsUnlockModalOpen(false);
           }}

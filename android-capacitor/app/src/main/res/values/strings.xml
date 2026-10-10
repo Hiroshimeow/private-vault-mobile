@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">Private Vault (Test)</string>
+    <string name="title_activity_main">Private Vault (Test)</string>
+    <string name="package_name">me.hculab.privatevault.web</string>
+    <string name="custom_url_scheme">me.hculab.privatevault.web</string>
+</resources>

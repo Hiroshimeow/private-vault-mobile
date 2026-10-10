@@ -5,136 +5,90 @@ on:
     branches: [main]
   pull_request:
   workflow_dispatch:
+  workflow_call:
 
 permissions:
   contents: read
 
-concurrency:
-  group: ci-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
-
-env:
-  FLUTTER_VERSION: 3.47.4
-  NODE_VERSION: "20"
-
 jobs:
-  web-quality:
-    name: Web - Lint, Typecheck & Build
-    runs-on: ubuntu-latest
+  web:
+    name: Web quality and production bundle
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
         with:
-          node-version: ${{ env.NODE_VERSION }}
+          node-version: "22.22.2"
           cache: npm
-
-      - name: Install dependencies
-        run: npm ci || npm install
-
-      - name: Typecheck & Lint
-        run: npm run lint
-
-      - name: Build Web Production Bundle
-        run: npm run build
-
-      - name: Upload Web Build Artifact
-        uses: actions/upload-artifact@v4
+      - run: npm ci
+      - run: npm run lint
+      - run: npm test
+      - run: npm audit --omit=dev --audit-level=high
+      - run: npm run build
+      - uses: actions/upload-artifact@v4
         with:
           name: private-vault-web-dist
           path: dist/
-          retention-days: 7
+          if-no-files-found: error
 
-  quality:
-    name: Format, analyze, test (Flutter)
-    runs-on: ubuntu-latest
-    if: hashFiles('pubspec.yaml') != ''
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Set up Flutter
-        uses: subosito/flutter-action@v2
-        with:
-          channel: stable
-          flutter-version: ${{ env.FLUTTER_VERSION }}
-          cache: true
-          pub-cache: true
-
-      - name: Resolve dependencies
-        run: flutter pub get
-
-      - name: Verify formatting
-        run: dart format --output=none --set-exit-if-changed lib test
-
-      - name: Analyze
-        run: flutter analyze
-
-      - name: Test
-        run: flutter test --coverage
-
-      - name: Security contract tests
-        run: flutter test test/unit/logging_contract_test.dart test/unit/platform_privacy_contract_test.dart
+  security:
+    name: Source security
+    uses: ./.github/workflows/sast.yml
 
   android:
-    name: Android debug + release smoke
-    runs-on: ubuntu-latest
-    if: hashFiles('pubspec.yaml') != ''
+    name: Android APK and signing guard
+    needs: web
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Set up Java
-        uses: actions/setup-java@v4
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22.22.2"
+          cache: npm
+      - uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: "17"
-
-      - name: Set up Flutter
-        uses: subosito/flutter-action@v2
+          java-version: "21"
+      - uses: android-actions/setup-android@v3
+      - run: sdkmanager "platforms;android-36" "build-tools;36.0.0"
+      - run: npm ci
+      - uses: actions/download-artifact@v4
         with:
-          channel: stable
-          flutter-version: ${{ env.FLUTTER_VERSION }}
-          cache: true
-          pub-cache: true
-
-      - name: Resolve dependencies
-        run: flutter pub get
-
-      - name: Build debug APK
-        run: flutter build apk --debug
-
-      - name: Build release APK smoke
-        run: flutter build apk --release
-
-      - name: Upload Android debug artifact
-        uses: actions/upload-artifact@v4
+          name: private-vault-web-dist
+          path: dist/
+      - run: npm run android:sync
+      - name: Build installable test APKs
+        working-directory: android-capacitor
+        run: |
+          chmod +x gradlew
+          ./gradlew --no-daemon :app:assembleDebug :app:assembleDebugAndroidTest
+      - name: Unsigned production release must fail closed
+        working-directory: android-capacitor
+        shell: bash
+        run: |
+          if ./gradlew --no-daemon :app:assembleRelease > signing-guard.log 2>&1; then
+            echo "ERROR: release unexpectedly built without signing credentials"
+            exit 1
+          fi
+          grep -F "Production signing credentials are required" signing-guard.log
+      - name: Collect APK and source evidence
+        shell: bash
+        run: |
+          mkdir -p artifacts
+          cp android-capacitor/app/build/outputs/apk/debug/app-debug.apk artifacts/Private-Vault-1.0.0-DEBUG-TEST-ONLY.apk
+          cp android-capacitor/app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk artifacts/
+          printf 'source_sha=%s\nworkflow=%s/%s/actions/runs/%s\nvariant=DEBUG-TEST-ONLY\napplication_id=me.hculab.privatevault.web\n' \
+            "$(git rev-parse HEAD)" "$GITHUB_SERVER_URL" "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID" > artifacts/BUILD_INFO.txt
+          cp package-lock.json artifacts/
+      - uses: actions/upload-artifact@v4
         with:
-          name: private-vault-mobile-android-debug
-          path: build/app/outputs/flutter-apk/app-debug.apk
+          name: private-vault-android-test
+          path: artifacts/
           if-no-files-found: error
-          retention-days: 14
 
-  ios:
-    name: iOS no-codesign smoke
-    runs-on: macos-latest
-    if: hashFiles('pubspec.yaml') != ''
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Set up Flutter
-        uses: subosito/flutter-action@v2
-        with:
-          channel: stable
-          flutter-version: ${{ env.FLUTTER_VERSION }}
-          cache: true
-          pub-cache: true
-
-      - name: Resolve dependencies
-        run: flutter pub get
-
-      - name: Build iOS without codesign
-        run: flutter build ios --release --no-codesign
+  emulator:
+    name: Android emulator acceptance
+    needs: android
+    uses: ./.github/workflows/android-integration.yml
