@@ -24,6 +24,8 @@ import {
 import { LocalVaultRepository } from '../vault/vaultRepository';
 import { VaultItem } from '../../types';
 import { seedSampleVaultMedia } from './sampleMedia';
+import { VaultThumbnail } from './VaultThumbnail';
+import { thumbnailCache } from './thumbnailCache';
 
 interface VaultGalleryProps {
   repository: LocalVaultRepository;
@@ -38,6 +40,18 @@ export const VaultGallery: React.FC<VaultGalleryProps> = ({
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState<'pictures' | 'albums' | 'videos' | 'favorites'>('pictures');
   const [selectedAlbum, setSelectedAlbum] = useState<string | null>(null);
+
+  // Custom persistent albums (even when empty)
+  const [customAlbums, setCustomAlbums] = useState<string[]>(() => {
+    try {
+      return JSON.parse(localStorage.getItem('vault_custom_albums') || '[]');
+    } catch {
+      return [];
+    }
+  });
+
+  // Batch import progress
+  const [importProgress, setImportProgress] = useState<{ total: number; current: number } | null>(null);
 
   // Search & Filter
   const [searchQuery, setSearchQuery] = useState('');
@@ -161,30 +175,40 @@ export const VaultGallery: React.FC<VaultGalleryProps> = ({
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [viewingIndex]);
 
-  // File import
-  const handleImportFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
+  // Multi-file batch import
+  const handleImportFiles = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const fileList = e.target.files;
+    if (!fileList || fileList.length === 0) return;
+    const files = Array.from(fileList);
+
+    setImportProgress({ total: files.length, current: 0 });
+    const targetAlbum = selectedAlbum || (activeTab === 'videos' ? 'Video' : 'Tải về');
+    let successCount = 0;
 
     try {
-      const buffer = await file.arrayBuffer();
-      const bytes = new Uint8Array(buffer);
-      const isVid = /\.(mp4|webm|mov|mkv)$/i.test(file.name);
-      const album = selectedAlbum || 'Tải về';
+      for (let i = 0; i < files.length; i++) {
+        const file = files[i];
+        setImportProgress({ total: files.length, current: i + 1 });
+        const buffer = await file.arrayBuffer();
+        const bytes = new Uint8Array(buffer);
+        const isVid = /\.(mp4|webm|mov|mkv)$/i.test(file.name);
 
-      await repository.addBytes(bytes, {
-        kind: isVid ? 'video' : 'image',
-        name: file.name,
-        album,
-        isFavorite: false,
-      });
+        await repository.addBytes(bytes, {
+          kind: isVid ? 'video' : 'image',
+          name: file.name,
+          album: targetAlbum,
+          isFavorite: false,
+        });
+        successCount++;
+      }
 
-      showToast(`Đã mã hóa và lưu "${file.name}" vào Thư mục Bảo mật`);
+      showToast(`Đã mã hóa và lưu ${successCount} tệp vào album "${targetAlbum}"`);
       await loadMedia();
     } catch (err) {
       console.error(err);
-      showToast('Lỗi khi mã hóa tệp vào thư mục bảo mật');
+      showToast(`Đã lưu ${successCount}/${files.length} tệp`);
     } finally {
+      setImportProgress(null);
       if (fileInputRef.current) fileInputRef.current.value = '';
     }
   };
@@ -270,6 +294,7 @@ export const VaultGallery: React.FC<VaultGalleryProps> = ({
   // Single Delete
   const handleDeleteItem = async (item: VaultItem) => {
     if (!window.confirm(`Xóa vĩnh viễn "${item.name}" khỏi Thư mục Bảo mật?`)) return;
+    thumbnailCache.remove(item.id);
     await repository.delete(item.id);
     setViewingIndex(null);
     showToast('Đã xóa tệp');
@@ -280,6 +305,7 @@ export const VaultGallery: React.FC<VaultGalleryProps> = ({
   const handleBatchDelete = async () => {
     if (selectedIds.size === 0) return;
     if (!window.confirm(`Xóa vĩnh viễn ${selectedIds.size} mục đã chọn?`)) return;
+    selectedIds.forEach((id) => thumbnailCache.remove(id));
     await repository.batchDelete(Array.from(selectedIds));
     setSelectedIds(new Set());
     setIsSelectMode(false);
@@ -342,7 +368,7 @@ export const VaultGallery: React.FC<VaultGalleryProps> = ({
     setIsSelectMode(false);
   };
 
-  // Distinct albums list
+  // Distinct albums list (includes empty custom albums)
   const albumList = useMemo(() => {
     const albumMap = new Map<string, number>();
     // Default categories
@@ -351,6 +377,11 @@ export const VaultGallery: React.FC<VaultGalleryProps> = ({
     albumMap.set('Du lịch', 0);
     albumMap.set('Gia đình', 0);
     albumMap.set('Tài chính', 0);
+
+    // Custom user-created albums
+    customAlbums.forEach((alb) => {
+      if (!albumMap.has(alb)) albumMap.set(alb, 0);
+    });
 
     items.forEach((item) => {
       const alb = item.album || 'Kho ảnh riêng tư';
@@ -361,7 +392,7 @@ export const VaultGallery: React.FC<VaultGalleryProps> = ({
       name,
       count,
     }));
-  }, [items]);
+  }, [items, customAlbums]);
 
   // Filtered items based on activeTab, selectedAlbum, and searchQuery
   const filteredItems = useMemo(() => {
@@ -385,12 +416,57 @@ export const VaultGallery: React.FC<VaultGalleryProps> = ({
     return result;
   }, [items, activeTab, selectedAlbum, searchQuery]);
 
+  // Group filtered items by Date (Samsung One UI Timeline Grouping)
+  const dateGroups = useMemo(() => {
+    const map: { [key: string]: { key: string; title: string; subTitle: string; items: VaultItem[] } } = {};
+    const now = new Date();
+    const todayStr = now.toDateString();
+    const yesterday = new Date(now);
+    yesterday.setDate(now.getDate() - 1);
+    const yesterdayStr = yesterday.toDateString();
+
+    filteredItems.forEach((item) => {
+      const d = new Date(item.createdAt || Date.now());
+      let key = d.toDateString();
+      let title = '';
+      let subTitle = '';
+
+      if (key === todayStr) {
+        title = 'Hôm nay';
+        subTitle = `${d.getDate()} tháng ${d.getMonth() + 1}, ${d.getFullYear()}`;
+      } else if (key === yesterdayStr) {
+        title = 'Hôm qua';
+        subTitle = `${d.getDate()} tháng ${d.getMonth() + 1}, ${d.getFullYear()}`;
+      } else {
+        title = `Ngày ${d.getDate()} tháng ${d.getMonth() + 1}, ${d.getFullYear()}`;
+        subTitle = `${item.album || 'Bộ sưu tập'}`;
+      }
+
+      if (!map[key]) {
+        map[key] = { key, title, subTitle, items: [] };
+      }
+      map[key].items.push(item);
+    });
+
+    return Object.values(map);
+  }, [filteredItems]);
+
   // Toggle selection
   const toggleSelect = (id: string, e: React.MouseEvent) => {
     e.stopPropagation();
     const next = new Set(selectedIds);
     if (next.has(id)) next.delete(id);
     else next.add(id);
+    setSelectedIds(next);
+  };
+
+  const selectGroup = (groupItems: VaultItem[]) => {
+    const next = new Set(selectedIds);
+    const allSelected = groupItems.every((i) => next.has(i.id));
+    groupItems.forEach((i) => {
+      if (allSelected) next.delete(i.id);
+      else next.add(i.id);
+    });
     setSelectedIds(next);
   };
 
@@ -407,10 +483,26 @@ export const VaultGallery: React.FC<VaultGalleryProps> = ({
       <input
         type="file"
         ref={fileInputRef}
-        onChange={handleImportFile}
+        onChange={handleImportFiles}
+        multiple
         accept="image/*,video/*"
         className="hidden"
       />
+
+      {/* Batch Import Progress Bar Overlay */}
+      {importProgress && (
+        <div className="absolute top-16 left-1/2 -translate-x-1/2 z-50 bg-[#162224] border border-teal-500/50 px-4 py-2.5 rounded-2xl shadow-2xl flex items-center gap-3 backdrop-blur-md animate-fade-in">
+          <div className="w-4 h-4 border-2 border-teal-400 border-t-transparent rounded-full animate-spin" />
+          <div className="flex flex-col">
+            <span className="text-xs font-bold text-white">
+              Đang mã hóa tệp ({importProgress.current}/{importProgress.total})
+            </span>
+            <span className="text-[10px] text-teal-400/90 font-mono">
+              AES-256 mã hóa trực tiếp vào Vault
+            </span>
+          </div>
+        </div>
+      )}
 
       {/* Top Gallery Header (Samsung OneUI Style) */}
       <header className="px-4 py-3 bg-[#131b1d] border-b border-zinc-800 shrink-0 flex items-center justify-between shadow-xs">
@@ -612,26 +704,42 @@ export const VaultGallery: React.FC<VaultGalleryProps> = ({
               <ImageIcon className="w-7 h-7" />
             </div>
             <div>
-              <p className="text-sm font-semibold text-zinc-300">Không có ảnh hoặc video nào</p>
+              <p className="text-sm font-semibold text-zinc-300">
+                {selectedAlbum ? `Album "${selectedAlbum}" chưa có mục nào` : 'Không có ảnh hoặc video nào'}
+              </p>
               <p className="text-xs text-zinc-500 mt-1 max-w-xs">
-                Nhập ảnh từ máy tính hoặc bấm "Nạp ảnh mẫu" để xem kho ảnh mẫu được mã hóa.
+                {selectedAlbum
+                  ? `Bấm nút bên dưới để chọn nhiều ảnh và thêm trực tiếp vào album "${selectedAlbum}".`
+                  : 'Nhập ảnh từ máy tính hoặc bấm "Nạp ảnh mẫu" để xem kho ảnh mẫu được mã hóa.'}
               </p>
             </div>
             <div className="flex items-center gap-2 pt-2">
-              <button
-                onClick={() => seedSampleVaultMedia(repository).then(loadMedia)}
-                className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-teal-500/20 text-teal-300 border border-teal-500/30 text-xs font-semibold hover:bg-teal-500/30 transition-colors"
-              >
-                <Sparkles className="w-3.5 h-3.5" />
-                <span>Nạp ảnh mẫu chất lượng cao</span>
-              </button>
-              <button
-                onClick={() => fileInputRef.current?.click()}
-                className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-zinc-800 text-zinc-200 text-xs font-semibold hover:bg-zinc-700 transition-colors"
-              >
-                <Plus className="w-3.5 h-3.5" />
-                <span>Nhập ảnh</span>
-              </button>
+              {selectedAlbum ? (
+                <button
+                  onClick={() => fileInputRef.current?.click()}
+                  className="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-teal-500 text-zinc-950 text-xs font-bold hover:bg-teal-400 transition-colors shadow-md"
+                >
+                  <Plus className="w-4 h-4" />
+                  <span>+ Thêm ảnh vào album này</span>
+                </button>
+              ) : (
+                <>
+                  <button
+                    onClick={() => seedSampleVaultMedia(repository).then(loadMedia)}
+                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-teal-500/20 text-teal-300 border border-teal-500/30 text-xs font-semibold hover:bg-teal-500/30 transition-colors"
+                  >
+                    <Sparkles className="w-3.5 h-3.5" />
+                    <span>Nạp ảnh mẫu chất lượng cao</span>
+                  </button>
+                  <button
+                    onClick={() => fileInputRef.current?.click()}
+                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-zinc-800 text-zinc-200 text-xs font-semibold hover:bg-zinc-700 transition-colors"
+                  >
+                    <Plus className="w-3.5 h-3.5" />
+                    <span>Nhập ảnh</span>
+                  </button>
+                </>
+              )}
             </div>
           </div>
         ) : (
@@ -650,78 +758,108 @@ export const VaultGallery: React.FC<VaultGalleryProps> = ({
               </div>
             )}
 
-            <div className="grid grid-cols-3 gap-2">
-              {filteredItems.map((item, idx) => {
-                const isSelected = selectedIds.has(item.id);
-                return (
-                  <div
-                    key={item.id}
-                    onClick={() => {
-                      if (isSelectMode) {
-                        const next = new Set(selectedIds);
-                        if (next.has(item.id)) next.delete(item.id);
-                        else next.add(item.id);
-                        setSelectedIds(next);
-                      } else {
-                        setViewingIndex(idx);
-                      }
-                    }}
-                    className={`relative aspect-square rounded-xl overflow-hidden bg-zinc-900 border cursor-pointer group transition-all ${
-                      isSelected
-                        ? 'border-teal-400 ring-2 ring-teal-400/50'
-                        : 'border-zinc-800 hover:border-zinc-600'
-                    }`}
-                  >
-                    {/* Media Thumbnail Rendering */}
-                    <div className="w-full h-full flex flex-col items-center justify-center bg-gradient-to-br from-zinc-900 to-[#121a1b] text-zinc-400">
-                      {item.kind === 'video' ? (
-                        <div className="flex flex-col items-center justify-center">
-                          <Play className="w-6 h-6 text-sky-400" />
-                          <span className="text-[9px] font-mono mt-1 text-zinc-400">VIDEO</span>
-                        </div>
-                      ) : (
-                        <div className="flex flex-col items-center justify-center p-2 text-center">
-                          <ImageIcon className="w-6 h-6 text-teal-400/80 mb-1" />
-                          <span className="text-[10px] font-medium text-zinc-300 truncate max-w-[85px]">
-                            {item.name || 'Ảnh bảo mật'}
-                          </span>
-                        </div>
-                      )}
+            <div className="space-y-5">
+              {dateGroups.map((group) => (
+                <div key={group.key} className="space-y-2">
+                  {/* Group Header (Samsung Gallery Style) */}
+                  <div className="flex items-center justify-between px-1">
+                    <div>
+                      <h3 className="text-xs font-bold text-white tracking-tight flex items-center gap-2">
+                        <span>{group.title}</span>
+                        <span className="text-[10px] font-mono text-zinc-500 font-normal">
+                          ({group.items.length})
+                        </span>
+                      </h3>
+                      <p className="text-[10px] text-zinc-400">{group.subTitle}</p>
                     </div>
 
-                    {/* Overlay Badges */}
-                    <div className="absolute top-1.5 right-1.5 flex items-center gap-1">
-                      {item.isFavorite && (
-                        <div className="p-1 rounded-full bg-black/60 backdrop-blur-xs text-rose-500">
-                          <Heart className="w-3 h-3 fill-current" />
-                        </div>
-                      )}
-                    </div>
-
-                    {item.album && (
-                      <div className="absolute bottom-1 left-1 px-1.5 py-0.5 rounded-md bg-black/70 backdrop-blur-xs text-[9px] text-zinc-300 font-mono truncate max-w-[80px]">
-                        {item.album}
-                      </div>
-                    )}
-
-                    {/* Select Checkbox */}
                     {isSelectMode && (
-                      <div
-                        onClick={(e) => toggleSelect(item.id, e)}
-                        className="absolute top-1.5 left-1.5 z-10"
+                      <button
+                        onClick={() => selectGroup(group.items)}
+                        className="text-[11px] text-teal-400 hover:underline font-semibold"
                       >
-                        {isSelected ? (
-                          <div className="w-5 h-5 rounded-md bg-teal-500 text-zinc-950 flex items-center justify-center">
-                            <CheckSquare className="w-4 h-4" />
-                          </div>
-                        ) : (
-                          <div className="w-5 h-5 rounded-md bg-black/60 border border-zinc-500" />
-                        )}
-                      </div>
+                        {group.items.every((i) => selectedIds.has(i.id))
+                          ? 'Bỏ chọn ngày'
+                          : 'Chọn ngày'}
+                      </button>
                     )}
                   </div>
-                );
-              })}
+
+                  {/* Group Thumbnails Grid */}
+                  <div className="grid grid-cols-3 gap-2">
+                    {group.items.map((item) => {
+                      const idx = filteredItems.findIndex((fi) => fi.id === item.id);
+                      const isSelected = selectedIds.has(item.id);
+
+                      return (
+                        <div
+                          key={item.id}
+                          onClick={() => {
+                            if (isSelectMode) {
+                              const next = new Set(selectedIds);
+                              if (next.has(item.id)) next.delete(item.id);
+                              else next.add(item.id);
+                              setSelectedIds(next);
+                            } else {
+                              setViewingIndex(idx >= 0 ? idx : 0);
+                            }
+                          }}
+                          className={`relative aspect-square rounded-2xl overflow-hidden bg-zinc-900 border cursor-pointer group transition-all duration-200 shadow-md ${
+                            isSelected
+                              ? 'border-teal-400 ring-2 ring-teal-400/60 scale-[0.98]'
+                              : 'border-zinc-800/80 hover:border-zinc-600 hover:scale-[1.02]'
+                          }`}
+                        >
+                          {/* Real Decrypted Image/Video Thumbnail */}
+                          <VaultThumbnail
+                            item={item}
+                            repository={repository}
+                            className="w-full h-full"
+                          />
+
+                          {/* Heart favorite badge */}
+                          {item.isFavorite && (
+                            <div className="absolute top-1.5 right-1.5 p-1 rounded-full bg-black/60 backdrop-blur-xs text-rose-500 shadow-xs">
+                              <Heart className="w-3 h-3 fill-current" />
+                            </div>
+                          )}
+
+                          {/* Video badge */}
+                          {item.kind === 'video' && (
+                            <div className="absolute bottom-1 right-1 px-1.5 py-0.5 rounded-md bg-black/70 backdrop-blur-xs text-[9px] font-mono text-zinc-300 flex items-center gap-1">
+                              <Play className="w-2.5 h-2.5 fill-current text-sky-400" />
+                              <span>{item.duration || '0:15'}</span>
+                            </div>
+                          )}
+
+                          {/* Album tag */}
+                          {item.album && (
+                            <div className="absolute bottom-1 left-1 px-1.5 py-0.5 rounded-md bg-black/70 backdrop-blur-xs text-[9px] text-zinc-300 font-mono truncate max-w-[70px]">
+                              {item.album}
+                            </div>
+                          )}
+
+                          {/* Selection Checkbox */}
+                          {isSelectMode && (
+                            <div
+                              onClick={(e) => toggleSelect(item.id, e)}
+                              className="absolute top-1.5 left-1.5 z-10"
+                            >
+                              {isSelected ? (
+                                <div className="w-5 h-5 rounded-md bg-teal-500 text-zinc-950 flex items-center justify-center shadow-md">
+                                  <CheckSquare className="w-3.5 h-3.5" />
+                                </div>
+                              ) : (
+                                <div className="w-5 h-5 rounded-md bg-black/60 border border-zinc-400 backdrop-blur-xs" />
+                              )}
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              ))}
             </div>
           </div>
         )}
@@ -992,26 +1130,56 @@ export const VaultGallery: React.FC<VaultGalleryProps> = ({
               className="w-full p-2.5 rounded-xl bg-zinc-800 border border-zinc-700 text-xs text-white focus:outline-none focus:ring-2 focus:ring-teal-500"
               autoFocus
             />
-            <div className="flex justify-end gap-2 pt-2">
-              <button
-                onClick={() => setIsCreateAlbumOpen(false)}
-                className="px-3.5 py-1.5 rounded-xl text-xs text-zinc-400 hover:bg-zinc-800"
-              >
-                Hủy
-              </button>
-              <button
-                onClick={() => {
-                  if (newAlbumName.trim()) {
-                    setSelectedAlbum(newAlbumName.trim());
+            <div className="flex flex-col gap-2 pt-2">
+              <div className="flex justify-end gap-2">
+                <button
+                  onClick={() => setIsCreateAlbumOpen(false)}
+                  className="px-3.5 py-1.5 rounded-xl text-xs text-zinc-400 hover:bg-zinc-800"
+                >
+                  Hủy
+                </button>
+                <button
+                  onClick={() => {
+                    const trimmed = newAlbumName.trim();
+                    if (!trimmed) return;
+                    if (!customAlbums.includes(trimmed)) {
+                      const next = [...customAlbums, trimmed];
+                      setCustomAlbums(next);
+                      localStorage.setItem('vault_custom_albums', JSON.stringify(next));
+                    }
+                    setSelectedAlbum(trimmed);
+                    setActiveTab('albums');
                     setIsCreateAlbumOpen(false);
                     setNewAlbumName('');
-                    showToast(`Đã tạo album "${newAlbumName.trim()}"`);
+                    showToast(`Đã tạo album "${trimmed}"`);
+                  }}
+                  disabled={!newAlbumName.trim()}
+                  className="px-4 py-1.5 rounded-xl text-xs font-semibold bg-zinc-800 hover:bg-zinc-700 text-white disabled:opacity-40"
+                >
+                  Tạo album rỗng
+                </button>
+              </div>
+              <button
+                onClick={() => {
+                  const trimmed = newAlbumName.trim();
+                  if (!trimmed) return;
+                  if (!customAlbums.includes(trimmed)) {
+                    const next = [...customAlbums, trimmed];
+                    setCustomAlbums(next);
+                    localStorage.setItem('vault_custom_albums', JSON.stringify(next));
                   }
+                  setSelectedAlbum(trimmed);
+                  setActiveTab('albums');
+                  setIsCreateAlbumOpen(false);
+                  setNewAlbumName('');
+                  showToast(`Đã tạo album "${trimmed}", hãy chọn ảnh nạp vào...`);
+                  setTimeout(() => fileInputRef.current?.click(), 120);
                 }}
                 disabled={!newAlbumName.trim()}
-                className="px-4 py-1.5 rounded-xl text-xs font-semibold bg-teal-500 text-zinc-950 disabled:opacity-40"
+                className="w-full py-2 rounded-xl text-xs font-bold bg-teal-500 text-zinc-950 hover:bg-teal-400 disabled:opacity-40 transition-colors shadow-md flex items-center justify-center gap-1.5"
               >
-                Tạo
+                <Plus className="w-4 h-4" />
+                <span>Tạo & Chọn ảnh nạp ngay</span>
               </button>
             </div>
           </div>

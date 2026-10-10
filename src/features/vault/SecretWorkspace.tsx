@@ -49,7 +49,7 @@ export const SecretWorkspace: React.FC<SecretWorkspaceProps> = ({
 
   useEffect(() => {
     reloadVaultMedia();
-  }, [vaultRepository, activeTab]);
+  }, [vaultRepository]);
 
   const titles = {
     apps: 'Thư mục Bảo mật',
@@ -79,9 +79,9 @@ export const SecretWorkspace: React.FC<SecretWorkspaceProps> = ({
         </button>
       </header>
 
-      {/* Main Content Body */}
+      {/* Main Content Body with Persistent Keep-Alive Tabs */}
       <main className="flex-1 overflow-hidden relative">
-        {activeTab === 'apps' && (
+        <div className={activeTab === 'apps' ? 'h-full w-full' : 'hidden'}>
           <CloneAppsHome
             cloneService={cloneService}
             vaultRepository={vaultRepository}
@@ -89,37 +89,37 @@ export const SecretWorkspace: React.FC<SecretWorkspaceProps> = ({
             onLock={onLock}
             onOpenGallery={() => setActiveTab('gallery')}
           />
-        )}
+        </div>
 
-        {activeTab === 'gallery' && (
+        <div className={activeTab === 'gallery' ? 'h-full w-full' : 'hidden'}>
           <VaultGallery
             repository={vaultRepository}
             confirmExport={settings.confirmExport}
           />
-        )}
+        </div>
 
-        {activeTab === 'browser' && (
+        <div className={activeTab === 'browser' ? 'h-full w-full' : 'hidden'}>
           <BrowserHome
             repository={vaultRepository}
             clearOnClose={settings.browserClearOnClose}
           />
-        )}
+        </div>
 
-        {activeTab === 'files' && (
+        <div className={activeTab === 'files' ? 'h-full w-full' : 'hidden'}>
           <SecureFilesAppView
             onBack={() => setActiveTab('apps')}
             repository={vaultRepository}
           />
-        )}
+        </div>
 
-        {activeTab === 'settings' && (
+        <div className={activeTab === 'settings' ? 'h-full w-full' : 'hidden'}>
           <SettingsHome
             settings={settings}
             onSettingsChanged={onSettingsChanged}
             onTriggerPanic={onTriggerPanic}
             onResetPin={onResetPin}
           />
-        )}
+        </div>
       </main>
 
       {/* Bottom Navigation Tabs (Samsung One UI Navigation Bar) */}

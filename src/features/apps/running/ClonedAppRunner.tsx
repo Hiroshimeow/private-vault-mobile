@@ -9,6 +9,7 @@ import { SecureCameraAppView } from './SecureCameraAppView';
 import { SecureFilesAppView } from './SecureFilesAppView';
 import { BankingAppView } from './BankingAppView';
 import { SocialAppView } from './SocialAppView';
+import { YouTubeAppView } from './YouTubeAppView';
 import { BrowserHome } from '../../browser/BrowserHome';
 import { ChevronLeft } from 'lucide-react';
 
@@ -116,7 +117,24 @@ export const ClonedAppRunner: React.FC<ClonedAppRunnerProps> = ({
     );
   }
 
-  // 10. Generic Custom App Sandbox View
+  // 10. YouTube / ReVanced / Morphe Media Player
+  if (
+    id.includes('youtube') ||
+    pkg.includes('youtube') ||
+    app.name.toLowerCase().includes('youtube') ||
+    app.name.toLowerCase().includes('morphe') ||
+    app.name.toLowerCase().includes('revanced')
+  ) {
+    return (
+      <YouTubeAppView
+        appName={app.name}
+        onBack={onBack}
+        repository={repository}
+      />
+    );
+  }
+
+  // 11. Generic Custom App Sandbox View
   return (
     <div className="flex flex-col h-full bg-[#12181a] text-white select-none overflow-hidden font-sans">
       <div className="p-3 bg-[#192225] border-b border-zinc-800 flex items-center justify-between shrink-0">

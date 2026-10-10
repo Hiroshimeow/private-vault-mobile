@@ -16,6 +16,7 @@ jobs:
   emulator:
     name: Android emulator RC integration
     runs-on: ubuntu-latest
+    if: hashFiles('pubspec.yaml') != ''
     steps:
       - name: Checkout
         uses: actions/checkout@v7
