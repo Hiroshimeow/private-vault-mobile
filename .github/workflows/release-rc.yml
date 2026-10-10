@@ -37,7 +37,7 @@ jobs:
         shell: bash
         run: |
           set -o pipefail
-          flutter test --coverage --machine --exclude-tags golden | tee flutter-test.jsonl
+          flutter test --coverage --machine | tee flutter-test.jsonl
           dart run tool/summarize_flutter_test.dart flutter-test.jsonl test-summary.txt "Unit/widget tests"
       - name: Security contracts
         run: flutter test test/unit/logging_contract_test.dart test/unit/platform_privacy_contract_test.dart test/unit/release_security_contract_test.dart test/unit/release_workflow_contract_test.dart test/unit/release_version_contract_test.dart
@@ -102,23 +102,13 @@ jobs:
           channel: stable
           flutter-version: ${{ env.FLUTTER_VERSION }}
       - run: flutter pub get --enforce-lockfile
-      - name: Configure KVM when available
-        shell: bash
+      - name: Enable KVM group perms
         run: |
-          set -u
-          if [[ -e /dev/kvm ]]; then
-            echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
-            sudo udevadm control --reload-rules || true
-            sudo udevadm trigger --name-match=kvm || true
-            sudo chmod 0666 /dev/kvm || true
-            if [[ -r /dev/kvm && -w /dev/kvm ]]; then
-              echo "KVM available; emulator will use hardware acceleration."
-            else
-              echo "KVM device exists but is not accessible; emulator runner will fall back automatically."
-            fi
-          else
-            echo "KVM is not exposed on this runner; emulator runner will use software acceleration."
-          fi
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+          test -r /dev/kvm
+          test -w /dev/kvm
 
       - name: Android emulator integration
         uses: reactivecircus/android-emulator-runner@v2
@@ -127,10 +117,9 @@ jobs:
           arch: x86_64
           profile: pixel_6
           disable-animations: true
-          disable-linux-hw-accel: auto
-          emulator-boot-timeout: 900
           script: |
-            bash -o pipefail -c 'flutter test integration_test/private_vault_rc_test.dart -d emulator-5554 --machine | tee integration-test.jsonl'
+            set -o pipefail
+            flutter test integration_test/private_vault_rc_test.dart -d emulator-5554 --machine | tee integration-test.jsonl
             dart run tool/summarize_flutter_test.dart integration-test.jsonl integration-summary.txt "Android emulator integration tests"
       - uses: actions/upload-artifact@v7
         if: always()

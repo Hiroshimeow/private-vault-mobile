@@ -9,8 +9,7 @@ Flutter owns application logic and UI. Native platform integrations stay behind 
 - crypto/key management: protected local key access and authenticated encryption
 - vault repository/storage: encrypted files and minimal metadata
 - media: import, camera capture, preview, explicit export
-- apps/clone profile: Android profile.CLONE capability, Shizuku privilege boundary, owned clone discovery, and user-scoped package operations
-- browser: embedded browser abstraction, profile identity, download-to-vault fallback
+- browser: embedded browser abstraction, profile identity, download-to-vault
 - panic: sensor normalization, thresholds, debounce
 - privacy/disguise bridge: screenshot/app-switcher protection and supported launcher/icon features
 - settings: local non-secret preferences
@@ -28,16 +27,10 @@ Use a vetted authenticated-encryption package. Every item encryption operation u
 The app starts locked. Backgrounding, panic, or timeout clears transient secret state and routes back to the configured cover. Secret routes verify lock state before rendering.
 
 ## Native bridges
-Android: `FLAG_SECURE` protects the Flutter activity and launcher disguise switches only between predeclared Calculator/Notes aliases. The active Apps path uses a narrow MethodChannel client backed by `CloneProfileBridge` and a Shizuku UserService. The UserService exposes only fixed operations for user discovery, CLONE creation, user start, package list/install/uninstall, activity resolution, and launch; it accepts no arbitrary shell command.
-
-Clone ownership is fail-closed. Private Vault persists only the user id that it created after a successful post-create user re-discovery proves that exact CLONE id. Existing unowned or ambiguous CLONE profiles are conflicts and are never adopted or modified. Package operations always carry the proven clone user id, preserving personal-user package state. Service teardown explicitly unbinds Shizuku and resolves pending waiters.
-
-Legacy managed-Work-Profile code remains in the tree for historical compatibility but is not the active Apps route and is not a fallback when Clone/Shizuku is unavailable.
-
-iOS: a privacy overlay covers inactive/app-switcher snapshots; runtime disguise can switch only to predeclared alternate icons, never the display name. There is no iOS clone-profile bridge or native clone emulation.
+Android: `FLAG_SECURE` currently protects the whole Flutter activity, and launcher disguise switches only between predeclared Calculator/Notes aliases. iOS: a privacy overlay covers inactive/app-switcher snapshots; runtime disguise can switch only to predeclared alternate icons, never the display name.
 
 ## Browser isolation
-The cross-platform WebView API exposes one app-level cookie/storage surface on supported platforms. Browser mode therefore implements **sequential ephemeral profiles**: switching profiles clears WebView cookies, cache, and local storage before opening the selected logical profile. It does not promise simultaneously retained independent cookie jars, anonymity, or native cross-app isolation. Android Clone/Shizuku and Browser are separate surfaces; Browser is not a hidden fallback from clone-profile failure. Direct HTTPS downloads can be encrypted to the vault, but browser mode does not transfer authenticated WebView cookies into its separate download client.
+The cross-platform WebView API exposes one app-level cookie/storage surface on supported platforms. V1 therefore implements **sequential ephemeral profiles**: switching profiles clears WebView cookies, cache, and local storage before opening the selected logical profile. It does not promise simultaneously retained independent cookie jars, native-app cloning, anonymity, or cross-app isolation. Direct HTTPS downloads can be encrypted to the vault, but V1 does not transfer authenticated WebView cookies into its separate download client.
 
 ## Persistence
 Encrypted content stays in app-private storage. Non-secret settings stay local. Imported source files remain at their user-selected source location; camera capture is read into the vault and plugin-owned temporary capture data is deleted on a best-effort basis. Explicit export creates an unprotected copy outside the vault. There is no remote backend in V1.

@@ -1,0 +1,92 @@
+type Listener = () => void;
+
+export class LockController {
+  private _isLocked = true;
+  private _backgroundTimer: ReturnType<typeof setTimeout> | null = null;
+  private _confidentialityBoundary: (() => void) | null = null;
+  private _listeners: Set<Listener> = new Set();
+  public backgroundLock = true;
+
+  get isLocked(): boolean {
+    return this._isLocked;
+  }
+
+  subscribe(listener: Listener): () => void {
+    this._listeners.add(listener);
+    return () => {
+      this._listeners.delete(listener);
+    };
+  }
+
+  private notify(): void {
+    for (const listener of this._listeners) {
+      listener();
+    }
+  }
+
+  attachConfidentialityBoundary(callback: () => void): void {
+    this._confidentialityBoundary = callback;
+  }
+
+  detachConfidentialityBoundary(callback: () => void): void {
+    if (this._confidentialityBoundary === callback) {
+      this._confidentialityBoundary = null;
+    }
+  }
+
+  unlock(): void {
+    if (this._backgroundTimer) {
+      clearTimeout(this._backgroundTimer);
+      this._backgroundTimer = null;
+    }
+    if (!this._isLocked) return;
+    this._isLocked = false;
+    this.notify();
+  }
+
+  lock(): void {
+    if (this._backgroundTimer) {
+      clearTimeout(this._backgroundTimer);
+      this._backgroundTimer = null;
+    }
+    if (this._isLocked) return;
+    this._confidentialityBoundary?.();
+    this._isLocked = true;
+    this.notify();
+  }
+
+  panic(): void {
+    this.lock();
+  }
+
+  onBackground(delayMs = 0): void {
+    if (!this.backgroundLock || this._isLocked) return;
+    if (this._backgroundTimer) {
+      clearTimeout(this._backgroundTimer);
+    }
+
+    if (delayMs <= 0) {
+      this.lock();
+      return;
+    }
+
+    this._backgroundTimer = setTimeout(() => {
+      this.lock();
+    }, delayMs);
+  }
+
+  onForeground(): void {
+    if (this._backgroundTimer) {
+      clearTimeout(this._backgroundTimer);
+      this._backgroundTimer = null;
+    }
+  }
+
+  dispose(): void {
+    if (this._backgroundTimer) {
+      clearTimeout(this._backgroundTimer);
+      this._backgroundTimer = null;
+    }
+    this._listeners.clear();
+  }
+}

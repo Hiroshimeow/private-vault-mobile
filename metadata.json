@@ -1,0 +1,6 @@
+{
+  "name": "Private Vault",
+  "description": "Local-first privacy utility with functional Calculator and Notes covers, PIN unlock, encrypted vault for notes/images/documents, ephemeral browser profiles, and panic conceal.",
+  "permissions": [],
+  "capabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

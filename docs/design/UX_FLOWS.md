@@ -12,19 +12,8 @@ Secret home -> create note/import/capture -> encrypt -> item list. Protected not
 ## Export
 Item -> Export -> explicit confirmation by default -> platform save. The warning states that exported files leave protected app storage and may become visible to other apps. A user may explicitly disable the confirmation in Settings; export itself is always an explicit item action.
 
-## Android isolated apps
-Secret home -> Apps -> clone capability check. If Shizuku is unavailable or not authorized, the screen shows `Authorize Shizuku`. Authorization is requested once per action and successful authorization refreshes capability state.
-
-Ready state with no owned clone -> choose a personal app -> Private Vault creates `android.os.usertype.profile.CLONE` for the current Android parent user -> re-queries Android users -> persists ownership only if the created id is the single unambiguous CLONE id -> starts that user -> installs the selected package with `--user <cloneId>`.
-
-Ready state with an owned clone -> personal app inventory shows whether each package already exists in the proven clone user. Uncloned apps expose `Clone`; cloned apps expose Open and Remove clone instance. Start/install/resolve/launch/uninstall failures are surfaced as operation failures and never silently fall back to a managed Work Profile.
-
-An existing unowned or ambiguous CLONE profile shows `Existing clone profile detected`. Private Vault does not adopt, modify, remove, or reuse that profile. An explicit OEM rejection/absence of the CLONE user type shows `Clone profiles unsupported`; policy/capacity/ambiguous create failures remain backend failures.
-
-Locking Private Vault does not stop an already-running cloned app outside it. On iOS or unsupported environments, the Apps surface exposes no fake clone operation.
-
 ## Browser
-Secret home -> Browser -> choose/create ephemeral logical profile -> browse. Browser is a separate user-selected surface, not an automatic fallback from Clone/Shizuku failure. Switching profiles first clears the shared WebView cookies/cache/local storage, then resets the page. A direct HTTPS response can be downloaded into the encrypted vault; authenticated WebView-cookie downloads are not supported in V1. Clear-on-close removes supported browser data. These profiles are sequential, not simultaneously retained identities.
+Secret home -> Browser -> choose/create ephemeral logical profile -> browse. Switching profiles first clears the shared WebView cookies/cache/local storage, then resets the page. A direct HTTPS response can be downloaded into the encrypted vault; authenticated WebView-cookie downloads are not supported in V1. Clear-on-close removes supported browser data. These profiles are sequential, not simultaneously retained identities.
 
 ## Panic
 Configured shake or sustained face-down signal -> debounce -> immediate lock -> cover. Cooldown suppresses repeated triggers.
