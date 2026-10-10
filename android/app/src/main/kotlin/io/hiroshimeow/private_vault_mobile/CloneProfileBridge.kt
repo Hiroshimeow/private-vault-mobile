@@ -1,568 +1,140 @@
-package io.hiroshimeow.private_vault_mobile
+﻿package io.hiroshimeow.private_vault_mobile
 
-import android.content.ComponentName
-import android.content.Context
 import android.content.Intent
-import android.content.ServiceConnection
-import android.content.pm.PackageManager
-import android.os.IBinder
-import android.os.Parcel
+import android.net.Uri
+import android.os.Bundle
 import io.flutter.plugin.common.BinaryMessenger
 import io.flutter.plugin.common.MethodChannel
-import rikka.shizuku.Shizuku
-import java.util.concurrent.Executors
 
 class CloneProfileBridge(
     private val activity: MainActivity,
     messenger: BinaryMessenger,
 ) {
     private val channel = MethodChannel(messenger, CHANNEL_NAME)
-    private val executor = Executors.newSingleThreadExecutor()
-    private val prefs = activity.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-    @Volatile private var serviceBinder: IBinder? = null
-    private var binding = false
-    private val serviceWaiters = mutableListOf<(IBinder?) -> Unit>()
-
-    private val serviceArgs: Shizuku.UserServiceArgs
-        get() = Shizuku.UserServiceArgs(
-            ComponentName(activity, CloneProfileUserService::class.java),
-        )
-            .processNameSuffix("clone_profile")
-            .tag("private-vault-clone-profile")
-            .version(1)
-            .daemon(false)
-
-    private val serviceConnection = object : ServiceConnection {
-        override fun onServiceConnected(name: ComponentName?, service: IBinder?) {
-            synchronized(serviceWaiters) {
-                serviceBinder = service
-                binding = false
-                val waiters = serviceWaiters.toList()
-                serviceWaiters.clear()
-                waiters.forEach { it(service) }
-            }
-        }
-
-        override fun onServiceDisconnected(name: ComponentName?) {
-            serviceBinder = null
-        }
-    }
 
     init {
         channel.setMethodCallHandler { call, result ->
-            when (call.method) {
-                "getCapability" -> withPrivilegedResult(result) { capability(it) }
-                "requestPrivilege" -> requestPrivilege(result)
-                "listApps" -> withPrivilegedResult(result) { listApps(it) }
-                "clone" -> {
-                    val packageName = call.argument<String>("packageName")
-                    if (!isPackageName(packageName)) {
-                        result.error("INVALID_PACKAGE", "Invalid package name", null)
-                    } else {
-                        withPrivilegedResult(result) { clonePackage(it, packageName!!) }
+            val value = runCatching {
+                when (call.method) {
+                    "getCapability" -> capability()
+                    "listApps" -> listApps()
+                    "clone" -> {
+                        val packageName = call.argument<String>("packageName")
+                        val slot = call.argument<Int>("slot")
+                        if (!isPackageName(packageName) || slot == null || slot !in 0..1) invalid("invalid package or slot")
+                        else registerIntoSlot(slot, packageName!!)
                     }
-                }
-                "launch" -> {
-                    val packageName = call.argument<String>("packageName")
-                    if (!isPackageName(packageName)) {
-                        result.error("INVALID_PACKAGE", "Invalid package name", null)
-                    } else {
-                        withPrivilegedResult(result) { launchPackage(it, packageName!!) }
+                    "launch" -> {
+                        val packageName = call.argument<String>("packageName")
+                        val slot = call.argument<Int>("slot")
+                        if (!isPackageName(packageName) || slot == null || slot !in 0..1) invalid("invalid package or slot")
+                        else verifiedSlotCall(slot, packageName!!, "launch")
                     }
-                }
-                "uninstall" -> {
-                    val packageName = call.argument<String>("packageName")
-                    if (!isPackageName(packageName)) {
-                        result.error("INVALID_PACKAGE", "Invalid package name", null)
-                    } else {
-                        withPrivilegedResult(result) { uninstallPackage(it, packageName!!) }
+                    "uninstall" -> {
+                        val slot = call.argument<Int>("slot")
+                        if (slot == null || slot !in 0..1) invalid("invalid slot") else helperCall(slot, "remove", null)
                     }
+                    else -> null
                 }
-                else -> result.notImplemented()
+            }.getOrElse { error ->
+                mapOf("state" to STATE_OPERATION_FAILED, "ok" to false, "message" to (error.message ?: "clone operation failed"))
             }
-        }
-    }
-
-    private fun requestPrivilege(result: MethodChannel.Result) {
-        if (!Shizuku.pingBinder()) {
-            result.success(false)
-            return
-        }
-        if (Shizuku.checkSelfPermission() == PackageManager.PERMISSION_GRANTED) {
-            result.success(true)
-            return
-        }
-        val listener = object : Shizuku.OnRequestPermissionResultListener {
-            override fun onRequestPermissionResult(requestCode: Int, grantResult: Int) {
-                if (requestCode != PERMISSION_REQUEST) return
-                Shizuku.removeRequestPermissionResultListener(this)
-                activity.runOnUiThread {
-                    result.success(grantResult == PackageManager.PERMISSION_GRANTED)
-                }
-            }
-        }
-        Shizuku.addRequestPermissionResultListener(listener)
-        try {
-            Shizuku.requestPermission(PERMISSION_REQUEST)
-        } catch (error: RuntimeException) {
-            Shizuku.removeRequestPermissionResultListener(listener)
-            result.success(false)
-        }
-    }
-
-    private fun withPrivilegedResult(
-        result: MethodChannel.Result,
-        operation: (IBinder) -> Any?,
-    ) {
-        if (!Shizuku.pingBinder() ||
-            Shizuku.checkSelfPermission() != PackageManager.PERMISSION_GRANTED
-        ) {
-            result.success(
-                mapOf(
-                    "state" to STATE_PRIVILEGE_REQUIRED,
-                    "message" to "Shizuku is not running or Private Vault has not been authorized.",
-                ),
-            )
-            return
-        }
-        withService { binder ->
-            if (binder == null) {
-                activity.runOnUiThread {
-                    result.success(
-                        mapOf(
-                            "state" to STATE_OPERATION_FAILED,
-                            "message" to "Privileged clone service could not be started.",
-                        ),
-                    )
-                }
-                return@withService
-            }
-            executor.execute {
-                try {
-                    val value = operation(binder)
-                    activity.runOnUiThread { result.success(value) }
-                } catch (error: Exception) {
-                    activity.runOnUiThread {
-                        result.success(
-                            mapOf(
-                                "state" to STATE_OPERATION_FAILED,
-                                "message" to (error.message ?: "Clone operation failed."),
-                            ),
-                        )
-                    }
-                }
-            }
-        }
-    }
-
-    private fun withService(callback: (IBinder?) -> Unit) {
-        val current = serviceBinder
-        if (current?.isBinderAlive == true) {
-            callback(current)
-            return
-        }
-        synchronized(serviceWaiters) {
-            val rechecked = serviceBinder
-            if (rechecked?.isBinderAlive == true) {
-                callback(rechecked)
-                return
-            }
-            serviceWaiters += callback
-            if (binding) return
-            binding = true
-            try {
-                Shizuku.bindUserService(serviceArgs, serviceConnection)
-            } catch (_: RuntimeException) {
-                binding = false
-                val waiters = serviceWaiters.toList()
-                serviceWaiters.clear()
-                waiters.forEach { it(null) }
-            }
-        }
-    }
-
-    private fun capability(binder: IBinder): Map<String, Any?> {
-        val users = run(binder, "list-users")
-        val owned = prefs.getInt(KEY_OWNED_CLONE_USER, -1)
-        val discovery = CloneProfileDiscovery.fromListUsers(
-            exitCode = users.exitCode,
-            stdout = users.stdout,
-            stderr = users.stderr,
-            ownedUserId = owned,
-        )
-        if (discovery.clearOwned) {
-            prefs.edit().remove(KEY_OWNED_CLONE_USER).apply()
-        }
-        return when (discovery.state) {
-            CloneProfileDiscovery.State.ready -> mapOf(
-                "state" to STATE_READY,
-                "userId" to discovery.userId,
-            )
-            CloneProfileDiscovery.State.conflicting -> mapOf(
-                "state" to STATE_CONFLICTING_PROFILE,
-                "message" to "An existing clone profile is not exclusively owned by Private Vault.",
-                "userId" to discovery.userId,
-            )
-            CloneProfileDiscovery.State.operationFailed -> mapOf(
-                "state" to STATE_OPERATION_FAILED,
-                "message" to discovery.message,
-            )
-        }
-    }
-
-    private fun listApps(binder: IBinder): Map<String, Any?> {
-        val cap = capability(binder)
-        if (cap["state"] != STATE_READY) return cap
-        val cloneUser = cap["userId"] as Int?
-        val installed = cloneUser?.let { userId ->
-            val packages = run(binder, "list-packages", listOf(userId.toString()))
-            val parsed = CloneProfilePackageList.fromCommand(
-                exitCode = packages.exitCode,
-                stdout = packages.stdout,
-                stderr = packages.stderr,
-            )
-            if (!parsed.ok) {
-                return mapOf(
-                    "state" to STATE_OPERATION_FAILED,
-                    "message" to parsed.message,
-                    "userId" to cloneUser,
-                )
-            }
-            parsed.packages
-        } ?: emptySet()
-
-        val launcher = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER)
-        val seen = mutableSetOf<String>()
-        val apps = activity.packageManager.queryIntentActivities(launcher, 0)
-            .mapNotNull { info ->
-                val packageName = info.activityInfo.packageName
-                if (packageName == activity.packageName || !seen.add(packageName)) {
-                    return@mapNotNull null
-                }
-                mapOf(
-                    "packageName" to packageName,
-                    "label" to info.loadLabel(activity.packageManager).toString(),
-                    "cloned" to installed.contains(packageName),
-                    "iconBytes" to boundedAppIconPng(
-                        activity.packageManager,
-                        info.activityInfo.applicationInfo,
-                    ),
-                )
-            }
-            .sortedBy { (it["label"] as String).lowercase() }
-        return mapOf(
-            "state" to STATE_READY,
-            "userId" to cloneUser,
-            "apps" to apps,
-        )
-    }
-
-    private fun clonePackage(binder: IBinder, packageName: String): Map<String, Any?> {
-        var cap = capability(binder)
-        if (cap["state"] != STATE_READY) return cap
-        var userId = cap["userId"] as Int?
-        if (userId == null) {
-            val currentUser = run(binder, "current-user")
-            val parentUserId = currentUser.stdout.trim().toIntOrNull()
-            if (currentUser.exitCode != 0 || parentUserId == null || parentUserId < 0) {
-                return mapOf(
-                    "state" to STATE_OPERATION_FAILED,
-                    "message" to "Android current user could not be verified.",
-                )
-            }
-            val create = run(
-                binder,
-                "create-clone",
-                listOf(parentUserId.toString()),
-            )
-            if (create.exitCode != 0) {
-                val details = "${create.stdout}\n${create.stderr}".trim()
-                val unsupported = details.contains("user type", ignoreCase = true) ||
-                    details.contains("unsupported", ignoreCase = true) ||
-                    details.contains("cannot add", ignoreCase = true)
-                return mapOf(
-                    "state" to if (unsupported) {
-                        STATE_OEM_UNSUPPORTED
-                    } else {
-                        STATE_OPERATION_FAILED
-                    },
-                    "message" to details.ifBlank { "Android did not create a clone profile." },
-                )
-            }
-            userId = Regex("""(?:id\s+|UserInfo\{)(\d+)""")
-                .find(create.stdout)
-                ?.groupValues
-                ?.getOrNull(1)
-                ?.toIntOrNull()
-            if (userId == null) {
-                val users = run(binder, "list-users")
-                if (users.exitCode != 0) {
-                    return mapOf(
-                        "state" to STATE_OPERATION_FAILED,
-                        "message" to "${users.stdout}\n${users.stderr}".trim()
-                            .ifBlank { "Clone profile was created but Android users could not be queried." },
-                    )
-                }
-                val discovered = CloneProfileDiscovery.cloneProfileIds(users.stdout)
-                userId = discovered.singleOrNull()
-            }
-            if (userId == null) {
-                return mapOf(
-                    "state" to STATE_OPERATION_FAILED,
-                    "message" to "Clone profile was created but its user id could not be verified.",
-                )
-            }
-            prefs.edit().putInt(KEY_OWNED_CLONE_USER, userId).apply()
-        }
-
-        run(binder, "start-user", listOf(userId.toString()))
-        val install = run(
-            binder,
-            "install-existing",
-            listOf(userId.toString(), packageName),
-        )
-        if (install.exitCode != 0 ||
-            !install.stdout.contains("installed", ignoreCase = true)
-        ) {
-            return mapOf(
-                "state" to STATE_OPERATION_FAILED,
-                "message" to "${install.stdout}\n${install.stderr}".trim()
-                    .ifBlank { "Package could not be installed in the clone profile." },
-            )
-        }
-        return mapOf("state" to STATE_READY, "userId" to userId, "ok" to true)
-    }
-
-    private fun launchPackage(binder: IBinder, packageName: String): Map<String, Any?> {
-        val cap = capability(binder)
-        if (cap["state"] != STATE_READY) return cap
-        val userId = cap["userId"] as Int?
-            ?: return mapOf(
-                "state" to STATE_OPERATION_FAILED,
-                "message" to "No Private Vault clone profile exists yet.",
-            )
-        val resolve = run(
-            binder,
-            "resolve-activity",
-            listOf(userId.toString(), packageName),
-        )
-        val component = resolve.stdout
-            .lineSequence()
-            .map(String::trim)
-            .firstOrNull { it.matches(COMPONENT_REGEX) }
-            ?: return mapOf(
-                "state" to STATE_OPERATION_FAILED,
-                "message" to "The cloned package has no launchable activity.",
-            )
-        run(binder, "start-user", listOf(userId.toString()))
-        val launch = run(
-            binder,
-            "launch",
-            listOf(userId.toString(), component),
-        )
-        return if (launch.exitCode == 0) {
-            mapOf("state" to STATE_READY, "userId" to userId, "ok" to true)
-        } else {
-            mapOf(
-                "state" to STATE_OPERATION_FAILED,
-                "message" to "${launch.stdout}\n${launch.stderr}".trim(),
-            )
-        }
-    }
-
-    private fun uninstallPackage(binder: IBinder, packageName: String): Map<String, Any?> {
-        val cap = capability(binder)
-        if (cap["state"] != STATE_READY) return cap
-        val userId = cap["userId"] as Int?
-            ?: return mapOf("state" to STATE_READY, "ok" to true)
-        val uninstall = run(
-            binder,
-            "uninstall",
-            listOf(userId.toString(), packageName),
-        )
-        return if (uninstall.exitCode == 0 &&
-            uninstall.stdout.contains("success", ignoreCase = true)
-        ) {
-            mapOf("state" to STATE_READY, "userId" to userId, "ok" to true)
-        } else {
-            mapOf(
-                "state" to STATE_OPERATION_FAILED,
-                "message" to "${uninstall.stdout}\n${uninstall.stderr}".trim(),
-            )
-        }
-    }
-
-    private fun run(
-        binder: IBinder,
-        operation: String,
-        args: List<String> = emptyList(),
-    ): NativeCommandResult {
-        val data = Parcel.obtain()
-        val reply = Parcel.obtain()
-        try {
-            data.writeInterfaceToken(CloneProfileUserService.DESCRIPTOR)
-            data.writeString(operation)
-            data.writeStringList(args)
-            if (!binder.transact(
-                    CloneProfileUserService.TRANSACTION_EXEC,
-                    data,
-                    reply,
-                    0,
-                )
-            ) {
-                throw IllegalStateException("Privileged clone service rejected the request.")
-            }
-            reply.readException()
-            return NativeCommandResult(
-                exitCode = reply.readInt(),
-                stdout = reply.readString().orEmpty(),
-                stderr = reply.readString().orEmpty(),
-            )
-        } finally {
-            reply.recycle()
-            data.recycle()
+            if (call.method in SUPPORTED_METHODS) result.success(value) else result.notImplemented()
         }
     }
 
     fun dispose() {
         channel.setMethodCallHandler(null)
-        executor.shutdownNow()
-        serviceBinder = null
     }
 
-    private data class NativeCommandResult(
-        val exitCode: Int,
-        val stdout: String,
-        val stderr: String,
-    )
+    private fun capability(): Map<String, Any?> {
+        val slots = slotStatuses()
+        if (slots.any { it["state"] == STATE_HELPER_MISSING }) {
+            return mapOf(
+                "state" to STATE_HELPER_MISSING,
+                "message" to "Both fixed plugin helper slots must be installed with the same signing identity as Private Vault.",
+                "slots" to slots,
+            )
+        }
+        return mapOf("state" to STATE_READY, "slots" to slots)
+    }
+
+    private fun listApps(): Map<String, Any?> {
+        val cap = capability()
+        if (cap["state"] != STATE_READY) return cap
+        val slots = cap["slots"] as List<Map<String, Any?>>
+        val launcher = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER)
+        val excluded = setOf(activity.packageName, PLUGIN_HOST_SLOT0, PLUGIN_HOST_SLOT1)
+        val seen = mutableSetOf<String>()
+        val apps = activity.packageManager.queryIntentActivities(launcher, 0)
+            .mapNotNull { info ->
+                val packageName = info.activityInfo.packageName
+                if (packageName in excluded || !seen.add(packageName)) return@mapNotNull null
+                val instanceSlots = slots.filter { it["packageName"] == packageName }.mapNotNull { it["slot"] as? Int }
+                mapOf(
+                    "packageName" to packageName,
+                    "label" to info.loadLabel(activity.packageManager).toString(),
+                    "slots" to instanceSlots,
+                )
+            }
+            .sortedBy { (it["label"] as String).lowercase() }
+        return mapOf("state" to STATE_READY, "slots" to slots, "apps" to apps)
+    }
+
+    private fun slotStatuses(): List<Map<String, Any?>> = (0..1).map { slot ->
+        val response = helperCall(slot, "status", null)
+        response + mapOf("slot" to slot)
+    }
+
+    private fun registerIntoSlot(slot: Int, packageName: String): Map<String, Any?> {
+        val status = helperCall(slot, "status", null)
+        if (status["state"] != STATE_READY) return status
+        val occupied = status["occupied"] == true
+        val existing = status["packageName"] as? String
+        if (occupied && existing != packageName) {
+            return mapOf("state" to STATE_NO_FREE_SLOT, "ok" to false, "message" to "slot ${slot + 1} is already occupied")
+        }
+        return helperCall(slot, "register", packageName)
+    }
+
+    private fun verifiedSlotCall(slot: Int, packageName: String, method: String): Map<String, Any?> {
+        val status = helperCall(slot, "status", null)
+        if (status["state"] != STATE_READY || status["packageName"] != packageName) {
+            return mapOf("state" to STATE_LAUNCH_FAILED, "ok" to false, "message" to "slot does not contain requested package")
+        }
+        return helperCall(slot, method, null)
+    }
+
+    private fun helperCall(slot: Int, method: String, arg: String?): Map<String, Any?> {
+        val host = if (slot == 0) PLUGIN_HOST_SLOT0 else PLUGIN_HOST_SLOT1
+        return try {
+            val bundle = activity.contentResolver.call(Uri.parse("content://$host.control"), method, arg, null)
+                ?: return mapOf("state" to STATE_OPERATION_FAILED, "ok" to false, "message" to "empty helper response")
+            bundle.toMap()
+        } catch (_: IllegalArgumentException) {
+            mapOf("state" to STATE_HELPER_MISSING, "ok" to false, "message" to "plugin helper slot $slot is not installed")
+        } catch (_: SecurityException) {
+            mapOf("state" to STATE_HELPER_MISSING, "ok" to false, "message" to "plugin helper slot $slot signing permission mismatch")
+        }
+    }
+
+    private fun Bundle.toMap(): Map<String, Any?> = keySet().associateWith { key -> get(key) }
+    private fun invalid(message: String): Map<String, Any?> =
+        mapOf("state" to STATE_OPERATION_FAILED, "ok" to false, "message" to message)
+
+    private fun isPackageName(value: String?): Boolean =
+        value != null && PACKAGE_NAME.matches(value)
 
     companion object {
-        const val CHANNEL_NAME = "private_vault/clone_profile"
-        private const val PREFS = "clone_profile"
-        private const val KEY_OWNED_CLONE_USER = "owned_clone_user"
-        private const val PERMISSION_REQUEST = 0x4350
+        private const val CHANNEL_NAME = "private_vault/clone_profile"
+        const val PLUGIN_HOST_SLOT0 = "io.hiroshimeow.private_vault.pluginhost.slot0"
+        const val PLUGIN_HOST_SLOT1 = "io.hiroshimeow.private_vault.pluginhost.slot1"
         private const val STATE_READY = "ready"
-        private const val STATE_PRIVILEGE_REQUIRED = "privilege_required"
-        private const val STATE_OEM_UNSUPPORTED = "clone_profile_unsupported_by_oem"
-        private const val STATE_CONFLICTING_PROFILE = "conflicting_external_clone_profile"
+        private const val STATE_HELPER_MISSING = "helper_missing"
+        private const val STATE_NO_FREE_SLOT = "no_free_slot"
+        private const val STATE_LAUNCH_FAILED = "launch_failed"
         private const val STATE_OPERATION_FAILED = "operation_failed"
-        private val PACKAGE_REGEX = Regex("""[A-Za-z0-9_]+(?:\.[A-Za-z0-9_]+)+""")
-        private val COMPONENT_REGEX =
-            Regex("""[A-Za-z0-9_]+(?:\.[A-Za-z0-9_]+)+/[A-Za-z0-9_.$]+""")
-
-        private fun isPackageName(value: String?): Boolean =
-            value != null && PACKAGE_REGEX.matches(value)
-    }
-}
-
-internal object CloneProfileDiscovery {
-    enum class State { ready, conflicting, operationFailed }
-
-    data class Result(
-        val state: State,
-        val userId: Int?,
-        val clearOwned: Boolean = false,
-        val message: String? = null,
-    )
-
-    fun fromListUsers(
-        exitCode: Int,
-        stdout: String,
-        stderr: String,
-        ownedUserId: Int,
-    ): Result {
-        if (exitCode != 0) {
-            return Result(
-                state = State.operationFailed,
-                userId = null,
-                message = "$stdout\n$stderr".trim()
-                    .ifBlank { "Android user list could not be queried." },
-            )
-        }
-        return resolve(cloneProfileIds(stdout), ownedUserId)
-    }
-
-    fun cloneProfileIds(output: String): List<Int> {
-        val ids = mutableListOf<Int>()
-        var legacyCurrentId: Int? = null
-        for (raw in output.lineSequence()) {
-            val line = raw.trim()
-            val verboseTypeMatch = Regex(
-                """(?:^|,\s*)type=(?:android\.os\.usertype\.)?profile\.CLONE(?:,|$)""",
-            ).containsMatchIn(line)
-            if (verboseTypeMatch) {
-                Regex("""(?:^|\s|,)id=(\d+)(?:,|\s|$)""")
-                    .find(line)
-                    ?.groupValues
-                    ?.getOrNull(1)
-                    ?.toIntOrNull()
-                    ?.let(ids::add)
-                continue
-            }
-
-            Regex("""UserInfo\{(\d+):""")
-                .find(line)
-                ?.groupValues
-                ?.getOrNull(1)
-                ?.toIntOrNull()
-                ?.let { legacyCurrentId = it }
-            if (line.contains("android.os.usertype.profile.CLONE") ||
-                line.contains("profile.CLONE")
-            ) {
-                legacyCurrentId?.let(ids::add)
-            }
-        }
-        return ids.distinct()
-    }
-
-    fun resolve(cloneIds: List<Int>, ownedUserId: Int): Result {
-        val unique = cloneIds.distinct()
-        if (unique.isEmpty()) {
-            return Result(
-                state = State.ready,
-                userId = null,
-                clearOwned = ownedUserId >= 0,
-            )
-        }
-        if (unique.size != 1 || ownedUserId < 0 || unique.single() != ownedUserId) {
-            return Result(
-                state = State.conflicting,
-                userId = unique.first(),
-            )
-        }
-        return Result(
-            state = State.ready,
-            userId = ownedUserId,
-        )
-    }
-}
-
-internal object CloneProfilePackageList {
-    data class Result(
-        val ok: Boolean,
-        val packages: Set<String> = emptySet(),
-        val message: String? = null,
-    )
-
-    private val packageRegex =
-        Regex("""[A-Za-z0-9_]+(?:\.[A-Za-z0-9_]+)+""")
-
-    fun fromCommand(
-        exitCode: Int,
-        stdout: String,
-        stderr: String,
-    ): Result {
-        if (exitCode != 0) {
-            val detail = "$stdout\n$stderr".trim()
-                .ifBlank { "Android package list could not be queried." }
-                .take(2048)
-            return Result(ok = false, message = detail)
-        }
-        val packages = stdout
-            .lineSequence()
-            .map { it.removePrefix("package:").trim() }
-            .filter(packageRegex::matches)
-            .toSet()
-        return Result(ok = true, packages = packages)
+        private val PACKAGE_NAME = Regex("[A-Za-z0-9_]+(\\.[A-Za-z0-9_]+)+")
+        private val SUPPORTED_METHODS = setOf("getCapability", "listApps", "clone", "launch", "uninstall")
     }
 }

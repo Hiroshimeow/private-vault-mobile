@@ -1,0 +1,22 @@
+﻿<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <uses-permission android:name="io.hiroshimeow.private_vault.permission.PLUGIN_CONTROL" />
+    <queries>
+        <intent>
+            <action android:name="android.intent.action.MAIN" />
+            <category android:name="android.intent.category.LAUNCHER" />
+        </intent>
+    </queries>
+    <application
+        android:allowBackup="false"
+        android:label="Private Vault Plugin Host">
+        <provider
+            android:name=".PluginHostProvider"
+            android:authorities="${applicationId}.control"
+            android:exported="true"
+            android:permission="io.hiroshimeow.private_vault.permission.PLUGIN_CONTROL" />
+        <activity
+            android:name=".PluginContainerActivity"
+            android:exported="false" />
+        <meta-data android:name="plugin_slot_id" android:value="${slotId}" />
+    </application>
+</manifest>

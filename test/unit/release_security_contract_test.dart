@@ -48,28 +48,31 @@ void main() {
   test(
     'Android release signing never falls back to debug credentials',
     () async {
-      final gradle = await File('android/app/build.gradle.kts').readAsString();
-      expect(gradle, isNot(contains('signingConfigs.getByName("debug")')));
-      expect(gradle, contains('signingConfigs.getByName("release")'));
-      expect(gradle, contains('ANDROID_KEYSTORE_PATH'));
-      expect(gradle, contains('ANDROID_KEYSTORE_PASSWORD'));
-      expect(gradle, contains('ANDROID_KEY_ALIAS'));
-      expect(gradle, contains('ANDROID_KEY_PASSWORD'));
-      expect(gradle, contains('Release signing is not configured.'));
-      expect(gradle, contains('setOf("assemble", "build", "bundle")'));
+      final appGradle = await File('android/app/build.gradle.kts').readAsString();
+      final helperGradle = await File(
+        'android/pluginhost/build.gradle.kts',
+      ).readAsString();
+      final signing = await File(
+        'android/release-signing.gradle.kts',
+      ).readAsString();
+
+      const applyLine = 'apply(from = rootProject.file("release-signing.gradle.kts"))';
+      expect(appGradle, contains(applyLine));
+      expect(helperGradle, contains(applyLine));
+      expect(signing, isNot(contains('signingConfigs.getByName("debug")')));
+      expect(signing, contains('signingConfigs.getByName("release")'));
+      expect(signing, contains('ANDROID_KEYSTORE_PATH'));
+      expect(signing, contains('ANDROID_KEYSTORE_PASSWORD'));
+      expect(signing, contains('ANDROID_KEY_ALIAS'));
+      expect(signing, contains('ANDROID_KEY_PASSWORD'));
+      expect(signing, contains('Release signing is not configured.'));
+      expect(signing, contains('selector.startsWith("assemble"'));
+      expect(signing, contains('selector.endsWith("Release"'));
+      expect(signing, contains("taskName.substringAfterLast(':')"));
+      expect(signing, contains("taskName.lastIndexOf(':')"));
+      expect(signing, contains('requestedProjectPath == project.path'));
       expect(
-        gradle,
-        contains('setOf("assembleRelease", "bundleRelease", "installRelease")'),
-      );
-      expect(
-        gradle,
-        isNot(contains('selector.contains("release", ignoreCase = true)')),
-      );
-      expect(gradle, contains("taskName.substringAfterLast(':')"));
-      expect(gradle, contains("taskName.lastIndexOf(':')"));
-      expect(gradle, contains('requestedProjectPath == project.path'));
-      expect(
-        gradle,
+        signing,
         contains(
           'gradle.startParameter.taskNames.any(::releaseSigningTaskRequested)',
         ),

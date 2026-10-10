@@ -50,8 +50,12 @@ try {
     & $gradle ":app:testDebugUnitTest" "--no-daemon" "-Pkotlin.incremental=false" "-Dkotlin.compiler.execution.strategy=in-process"
   }
 
+  Invoke-Checked "Plugin host unit tests" {
+    & $gradle ":pluginhost:testSlot0DebugUnitTest" "--no-daemon" "-Pkotlin.incremental=false" "-Dkotlin.compiler.execution.strategy=in-process"
+  }
+
   Invoke-Checked "Android debug assemble" {
-    & $gradle ":app:assembleDebug" "--no-daemon" "-Pkotlin.incremental=false" "-Dkotlin.compiler.execution.strategy=in-process"
+    & $gradle ":app:assembleDebug" ":pluginhost:assembleSlot0Debug" ":pluginhost:assembleSlot1Debug" ":pluginfixture:assembleDebug" "--no-daemon" "-Pkotlin.incremental=false" "-Dkotlin.compiler.execution.strategy=in-process"
   }
 } finally {
   Pop-Location
