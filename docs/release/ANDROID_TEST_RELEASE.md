@@ -16,7 +16,8 @@ The publishing workflow requires TypeScript checks, packaging contract tests, pr
 
 - Apps/YouTube/ReVanced screens are web demonstrations, not real Android app cloning or patched YouTube execution.
 - Native biometric unlock, OEM CLONE/Shizuku, isolated browser profiles, Android file export and real camera/sensor behavior have not been accepted on a physical device.
-- Vault data uses the current web application's IndexedDB encryption model. This packaging change does not restore the previous Flutter/Portable Vault V2 implementation.
+- Vault payloads use the current web application's IndexedDB encryption model, but its master key is persisted in localStorage rather than Android Keystore or PIN-derived protected key storage. A PIN locks the UI; it does not cryptographically protect that persisted key. Do not use this test build for sensitive data.
+- This packaging change does not restore the previous Flutter/Portable Vault V2 implementation.
 - iOS is not built or distributed by this workflow.
 - This release is for testing with synthetic data; production security/device acceptance is incomplete.
 

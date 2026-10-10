@@ -19,3 +19,5 @@ Local compilation: NOT RUN, per owner instruction. Local dependency installation
 Final GitHub run/release identity is recorded in the conversation and attached BUILD_INFO.txt.
 
 Security correction found during packaging: LockController started unlocked and backgroundLock was disabled. Cold start now locks; native app inactivity immediately relocks and dismisses the PIN dialog. Regression checks run on GitHub.
+
+Pre-release validation: source 51b94f88e40e383c529821bab2183daef5d025e6, GitHub run https://github.com/Hiroshimeow/private-vault-mobile/actions/runs/38057456962, all four jobs PASS (web, SAST, Android APK/signing guard, hosted emulator). Five Node regression/packaging checks and two Android instrumentation tests passed. Production/device security remains incomplete; persistent web master-key storage is documented in release notes.
